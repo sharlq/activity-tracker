@@ -1,0 +1,790 @@
+// رقيب's own records, next to the events in the same database: background audio,
+// what you log for the gaps in your day, daily tasks, reminders, and settings.
+//
+// Its own connection, so the tracker's event writes and these never share a
+// transaction. WAL mode lets both write the same file one after the other.
+import Database from 'better-sqlite3';
+import type { ReminderSchedule } from './planner.ts';
+import { DEFAULT_SETTINGS, mergeSettings, parseSchedule } from './planner.ts';
+import type { NewProjectPlan, PlannedSubtask, Replan } from './projectPlan.ts';
+import type { Progress, Project, ProjectDay, ProjectOverview, ProjectStatus, Subtask, Target } from './projects.ts';
+import { overview } from './projects.ts';
+import type { ScreenSource } from './screens.ts';
+import { migrate } from './store.ts';
+
+export interface AudioSource {
+  processName: string;
+  exePath: string | null;
+  /** What's playing, when the app shows it (Spotify's window title, a tab's title). */
+  title: string | null;
+  /** For browser tabs reported by the extension. */
+  domain: string | null;
+}
+
+export interface AudioEvent {
+  id: number;
+  start: number;
+  end: number;
+  source: AudioSource;
+}
+
+/** The window on top of one of the screens that didn't have the focus. */
+export interface ScreenEvent {
+  id: number;
+  start: number;
+  end: number;
+  source: ScreenSource;
+}
+
+export interface Entry {
+  id: number;
+  start: number;
+  end: number;
+  label: string;
+  category: string | null;
+}
+
+export interface Task {
+  id: number;
+  /** Local date, YYYY-MM-DD. */
+  day: string;
+  text: string;
+  /** When it was ticked off, or null. */
+  doneAt: number | null;
+}
+
+export type CheckinPart = 'morning' | 'evening';
+
+/** How you felt, 1 (low) to 5 (great), once in the morning and once in the evening. */
+export interface Checkin {
+  day: string;
+  part: CheckinPart;
+  mood: number | null;
+  energy: number | null;
+  note: string | null;
+  at: number;
+}
+
+export type GoalResult = 'met' | 'partly' | 'missed';
+
+/** Something you want to get done that day, looked back on in the evening. */
+export interface Goal {
+  id: number;
+  day: string;
+  text: string;
+  result: GoalResult | null;
+}
+
+/** What you wrote looking back on a week. `week` is its Monday. */
+export interface Review {
+  week: string;
+  wentWell: string | null;
+  toChange: string | null;
+  updatedAt: number;
+}
+
+export interface Reminder {
+  id: number;
+  text: string;
+  schedule: ReminderSchedule;
+  enabled: boolean;
+  lastFiredAt: number | null;
+  createdAt: number;
+}
+
+type AudioRow = {
+  id: number;
+  start_ms: number;
+  end_ms: number;
+  process_name: string;
+  exe_path: string | null;
+  title: string | null;
+  domain: string | null;
+};
+type ScreenRow = {
+  id: number;
+  start_ms: number;
+  end_ms: number;
+  screen: number;
+  process_name: string;
+  exe_path: string | null;
+  title: string | null;
+  domain: string | null;
+};
+type EntryRow = { id: number; start_ms: number; end_ms: number; label: string; category: string | null };
+type TaskRow = { id: number; day: string; text: string; done_ms: number | null };
+type ReminderRow = {
+  id: number;
+  text: string;
+  schedule: string;
+  enabled: number;
+  last_fired_ms: number | null;
+  created_ms: number;
+};
+
+export const audioFromRow = (row: AudioRow): AudioEvent => ({
+  id: row.id,
+  start: row.start_ms,
+  end: row.end_ms,
+  source: { processName: row.process_name, exePath: row.exe_path, title: row.title, domain: row.domain },
+});
+export const screenFromRow = (row: ScreenRow): ScreenEvent => ({
+  id: row.id,
+  start: row.start_ms,
+  end: row.end_ms,
+  source: { screen: row.screen, processName: row.process_name, exePath: row.exe_path, title: row.title, domain: row.domain },
+});
+export const entryFromRow = (row: EntryRow): Entry => ({
+  id: row.id,
+  start: row.start_ms,
+  end: row.end_ms,
+  label: row.label,
+  category: row.category,
+});
+type ProjectRow = {
+  id: number;
+  name: string;
+  color: string | null;
+  status: ProjectStatus;
+  due_day: string | null;
+  position: number;
+  created_ms: number;
+};
+type SubtaskRow = {
+  id: number;
+  project_id: number;
+  title: string;
+  unit: string | null;
+  total: number | null;
+  done_amount: number;
+  done_ms: number | null;
+  due_day: string | null;
+  position: number;
+};
+const projectFromRow = (r: ProjectRow): Project => ({
+  id: r.id,
+  name: r.name,
+  color: r.color,
+  status: r.status,
+  due: r.due_day,
+  position: r.position,
+  createdAt: r.created_ms,
+});
+const subtaskFromRow = (r: SubtaskRow): Subtask => ({
+  id: r.id,
+  projectId: r.project_id,
+  title: r.title,
+  unit: r.unit,
+  total: r.total,
+  done: r.done_amount,
+  doneAt: r.done_ms,
+  due: r.due_day,
+  position: r.position,
+});
+const SUBTASK_SELECT = `SELECT s.*, s.base + COALESCE((SELECT SUM(amount) FROM progress p WHERE p.subtask_id = s.id), 0) AS done_amount FROM subtasks s`;
+
+/** A change to a project. Fields left undefined stay as they are. */
+export interface ProjectChange {
+  name?: string;
+  color?: string | null;
+  status?: ProjectStatus;
+  due?: string | null;
+}
+
+/** A change to a sub-task. Fields left undefined stay as they are. */
+export interface SubtaskChange {
+  title?: string;
+  /** Changing these turns a checkbox into a measured sub-task; both null turns it back. */
+  unit?: string | null;
+  total?: number | null;
+  due?: string | null;
+}
+
+const taskFromRow = (row: TaskRow): Task => ({ id: row.id, day: row.day, text: row.text, doneAt: row.done_ms });
+const reminderFromRow = (row: ReminderRow): Reminder => ({
+  id: row.id,
+  text: row.text,
+  schedule: parseSchedule(JSON.parse(row.schedule)),
+  enabled: row.enabled === 1,
+  lastFiredAt: row.last_fired_ms,
+  createdAt: row.created_ms,
+});
+
+export class Journal {
+  private readonly db: Database.Database;
+
+  constructor(path: string) {
+    this.db = new Database(path);
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('busy_timeout = 5000');
+    this.db.pragma('secure_delete = ON');
+    migrate(this.db);
+  }
+
+  // Background audio -------------------------------------------------------
+
+  startAudio(source: AudioSource, start: number, end: number): number {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO audio_events (start_ms, end_ms, process_name, exe_path, title, domain) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(start, end, source.processName, source.exePath, source.title, source.domain);
+    return Number(lastInsertRowid);
+  }
+
+  extendAudio(id: number, end: number): void {
+    this.db.prepare('UPDATE audio_events SET end_ms = ? WHERE id = ? AND end_ms <= ?').run(end, id, end);
+  }
+
+  audioBetween(from: number, to: number): AudioEvent[] {
+    const rows = this.db
+      .prepare('SELECT * FROM audio_events WHERE start_ms < ? AND end_ms > ? ORDER BY start_ms, id')
+      .all(to, from) as AudioRow[];
+    return rows.map(audioFromRow).map((e) => ({ ...e, start: Math.max(e.start, from), end: Math.min(e.end, to) }));
+  }
+
+  // Other screens ----------------------------------------------------------
+
+  startScreen(source: ScreenSource, start: number, end: number): number {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO screen_events (start_ms, end_ms, screen, process_name, exe_path, title, domain) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(start, end, source.screen, source.processName, source.exePath, source.title, source.domain);
+    return Number(lastInsertRowid);
+  }
+
+  extendScreen(id: number, end: number): void {
+    this.db.prepare('UPDATE screen_events SET end_ms = ? WHERE id = ? AND end_ms <= ?').run(end, id, end);
+  }
+
+  screensBetween(from: number, to: number): ScreenEvent[] {
+    const rows = this.db
+      .prepare('SELECT * FROM screen_events WHERE start_ms < ? AND end_ms > ? ORDER BY start_ms, id')
+      .all(to, from) as ScreenRow[];
+    return rows.map(screenFromRow).map((e) => ({ ...e, start: Math.max(e.start, from), end: Math.min(e.end, to) }));
+  }
+
+  // Entries you log for gaps -----------------------------------------------
+
+  entriesBetween(from: number, to: number): Entry[] {
+    const rows = this.db
+      .prepare('SELECT * FROM entries WHERE start_ms < ? AND end_ms > ? ORDER BY start_ms, id')
+      .all(to, from) as EntryRow[];
+    return rows.map(entryFromRow);
+  }
+
+  addEntry(entry: Omit<Entry, 'id'>, now = Date.now()): Entry {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO entries (start_ms, end_ms, label, category, created_ms) VALUES (?, ?, ?, ?, ?)')
+      .run(entry.start, entry.end, entry.label, entry.category, now);
+    return { ...entry, id: Number(lastInsertRowid) };
+  }
+
+  updateEntry(id: number, entry: Omit<Entry, 'id'>): boolean {
+    return (
+      this.db
+        .prepare('UPDATE entries SET start_ms = ?, end_ms = ?, label = ?, category = ? WHERE id = ?')
+        .run(entry.start, entry.end, entry.label, entry.category, id).changes > 0
+    );
+  }
+
+  deleteEntry(id: number): boolean {
+    return this.db.prepare('DELETE FROM entries WHERE id = ?').run(id).changes > 0;
+  }
+
+  // Tasks ------------------------------------------------------------------
+
+  tasks(day: string): Task[] {
+    return (this.db.prepare('SELECT * FROM tasks WHERE day = ? ORDER BY id').all(day) as TaskRow[]).map(taskFromRow);
+  }
+
+  addTask(day: string, text: string, now = Date.now()): Task {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO tasks (day, text, done_ms, created_ms) VALUES (?, ?, NULL, ?)')
+      .run(day, text, now);
+    return { id: Number(lastInsertRowid), day, text, doneAt: null };
+  }
+
+  updateTask(id: number, change: { text?: string; done?: boolean }, now = Date.now()): Task | null {
+    const row = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
+    if (!row) return null;
+    const text = change.text ?? row.text;
+    const done = change.done === undefined ? row.done_ms : change.done ? (row.done_ms ?? now) : null;
+    this.db.prepare('UPDATE tasks SET text = ?, done_ms = ? WHERE id = ?').run(text, done, id);
+    return { id, day: row.day, text, doneAt: done };
+  }
+
+  deleteTask(id: number): boolean {
+    return this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id).changes > 0;
+  }
+
+  /** Copies the unfinished tasks of one day to another, skipping any already there. */
+  carryOver(fromDay: string, toDay: string, now = Date.now()): Task[] {
+    return this.db.transaction(() => {
+      const existing = new Set(this.tasks(toDay).map((t) => t.text));
+      const added: Task[] = [];
+      for (const task of this.tasks(fromDay)) {
+        if (task.doneAt !== null || existing.has(task.text)) continue;
+        added.push(this.addTask(toDay, task.text, now));
+        existing.add(task.text);
+      }
+      return added;
+    })();
+  }
+
+  // Check-ins: mood and energy -----------------------------------------------
+
+  checkins(day: string): Checkin[] {
+    return this.checkinsBetween(day, day);
+  }
+
+  /** Every check-in from one day to another, both included, oldest first. */
+  checkinsBetween(fromDay: string, toDay: string): Checkin[] {
+    const rows = this.db
+      .prepare("SELECT * FROM checkins WHERE day >= ? AND day <= ? ORDER BY day, CASE part WHEN 'morning' THEN 0 ELSE 1 END")
+      .all(fromDay, toDay) as { day: string; part: CheckinPart; mood: number | null; energy: number | null; note: string | null; at_ms: number }[];
+    return rows.map((r) => ({ day: r.day, part: r.part, mood: r.mood, energy: r.energy, note: r.note, at: r.at_ms }));
+  }
+
+  /** Saves the morning or evening check-in. Fields left undefined keep what's there. */
+  setCheckin(day: string, part: CheckinPart, change: { mood?: number | null; energy?: number | null; note?: string | null }, now = Date.now()): Checkin {
+    const current = this.checkins(day).find((c) => c.part === part);
+    const next: Checkin = {
+      day,
+      part,
+      mood: change.mood === undefined ? (current?.mood ?? null) : change.mood,
+      energy: change.energy === undefined ? (current?.energy ?? null) : change.energy,
+      note: change.note === undefined ? (current?.note ?? null) : change.note,
+      at: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO checkins (day, part, mood, energy, note, at_ms) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (day, part) DO UPDATE SET mood = excluded.mood, energy = excluded.energy, note = excluded.note, at_ms = excluded.at_ms`,
+      )
+      .run(day, part, next.mood, next.energy, next.note, now);
+    return next;
+  }
+
+  // Goals ------------------------------------------------------------------
+
+  goals(day: string): Goal[] {
+    return this.goalsBetween(day, day);
+  }
+
+  goalsBetween(fromDay: string, toDay: string): Goal[] {
+    const rows = this.db.prepare('SELECT * FROM goals WHERE day >= ? AND day <= ? ORDER BY day, id').all(fromDay, toDay) as {
+      id: number;
+      day: string;
+      text: string;
+      result: GoalResult | null;
+    }[];
+    return rows.map((r) => ({ id: r.id, day: r.day, text: r.text, result: r.result }));
+  }
+
+  addGoal(day: string, text: string, now = Date.now()): Goal {
+    const { lastInsertRowid } = this.db.prepare('INSERT INTO goals (day, text, result, created_ms) VALUES (?, ?, NULL, ?)').run(day, text, now);
+    return { id: Number(lastInsertRowid), day, text, result: null };
+  }
+
+  updateGoal(id: number, change: { text?: string; result?: GoalResult | null }): Goal | null {
+    const row = this.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) as { id: number; day: string; text: string; result: GoalResult | null } | undefined;
+    if (!row) return null;
+    const text = change.text ?? row.text;
+    const result = change.result === undefined ? row.result : change.result;
+    this.db.prepare('UPDATE goals SET text = ?, result = ? WHERE id = ?').run(text, result, id);
+    return { id, day: row.day, text, result };
+  }
+
+  deleteGoal(id: number): boolean {
+    return this.db.prepare('DELETE FROM goals WHERE id = ?').run(id).changes > 0;
+  }
+
+  // Weekly reviews -----------------------------------------------------------
+
+  review(week: string): Review | null {
+    const row = this.db.prepare('SELECT * FROM reviews WHERE week = ?').get(week) as
+      | { week: string; went_well: string | null; to_change: string | null; updated_ms: number }
+      | undefined;
+    return row ? { week: row.week, wentWell: row.went_well, toChange: row.to_change, updatedAt: row.updated_ms } : null;
+  }
+
+  setReview(week: string, change: { wentWell?: string | null; toChange?: string | null }, now = Date.now()): Review {
+    const current = this.review(week);
+    const next: Review = {
+      week,
+      wentWell: change.wentWell === undefined ? (current?.wentWell ?? null) : change.wentWell,
+      toChange: change.toChange === undefined ? (current?.toChange ?? null) : change.toChange,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO reviews (week, went_well, to_change, updated_ms) VALUES (?, ?, ?, ?)
+         ON CONFLICT (week) DO UPDATE SET went_well = excluded.went_well, to_change = excluded.to_change, updated_ms = excluded.updated_ms`,
+      )
+      .run(week, next.wentWell, next.toChange, now);
+    return next;
+  }
+
+  // Projects -----------------------------------------------------------------
+
+  /** Every project, in their order. Pass a status to see only those. */
+  projects(status?: ProjectStatus): Project[] {
+    const rows = (
+      status
+        ? this.db.prepare('SELECT * FROM projects WHERE status = ? ORDER BY position, id').all(status)
+        : this.db.prepare('SELECT * FROM projects ORDER BY position, id').all()
+    ) as ProjectRow[];
+    return rows.map(projectFromRow);
+  }
+
+  project(id: number): Project | null {
+    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;
+    return row ? projectFromRow(row) : null;
+  }
+
+  addProject(project: { name: string; color?: string | null; due?: string | null }, now = Date.now()): Project {
+    const position = (this.db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS next FROM projects').get() as { next: number }).next;
+    const { lastInsertRowid } = this.db
+      .prepare("INSERT INTO projects (name, color, status, due_day, position, created_ms) VALUES (?, ?, 'active', ?, ?, ?)")
+      .run(project.name, project.color ?? null, project.due ?? null, position, now);
+    return { id: Number(lastInsertRowid), name: project.name, color: project.color ?? null, status: 'active', due: project.due ?? null, position, createdAt: now };
+  }
+
+  updateProject(id: number, change: ProjectChange): Project | null {
+    const current = this.project(id);
+    if (!current) return null;
+    const next: Project = {
+      ...current,
+      name: change.name ?? current.name,
+      color: change.color === undefined ? current.color : change.color,
+      status: change.status ?? current.status,
+      due: change.due === undefined ? current.due : change.due,
+    };
+    this.db.prepare('UPDATE projects SET name = ?, color = ?, status = ?, due_day = ? WHERE id = ?').run(next.name, next.color, next.status, next.due, id);
+    return next;
+  }
+
+  /** Deletes a project with its sub-tasks, progress, notes, and plan. */
+  deleteProject(id: number): boolean {
+    return this.db.transaction(() => {
+      for (const s of this.subtasks(id)) this.deleteSubtask(s.id);
+      this.db.prepare('DELETE FROM project_days WHERE project_id = ?').run(id);
+      return this.db.prepare('DELETE FROM projects WHERE id = ?').run(id).changes > 0;
+    })();
+  }
+
+  /** Puts projects in this order; ids not listed keep their place after these. */
+  reorderProjects(ids: number[]): void {
+    this.db.transaction(() => {
+      const rest = this.projects().filter((p) => !ids.includes(p.id)).map((p) => p.id);
+      const update = this.db.prepare('UPDATE projects SET position = ? WHERE id = ?');
+      [...ids, ...rest].forEach((id, i) => update.run(i + 1, id));
+    })();
+  }
+
+  // Sub-tasks ----------------------------------------------------------------
+
+  subtasks(projectId: number): Subtask[] {
+    return (this.db.prepare(`${SUBTASK_SELECT} WHERE s.project_id = ? ORDER BY s.position, s.id`).all(projectId) as SubtaskRow[]).map(subtaskFromRow);
+  }
+
+  subtask(id: number): Subtask | null {
+    const row = this.db.prepare(`${SUBTASK_SELECT} WHERE s.id = ?`).get(id) as SubtaskRow | undefined;
+    return row ? subtaskFromRow(row) : null;
+  }
+
+  /**
+   * Null when the project doesn't exist. Without a total it's a checkbox. `alreadyDone` is
+   * what was finished before tracking began (slide 266 of 876): it counts toward the bar
+   * but not toward any day's work.
+   */
+  addSubtask(projectId: number, subtask: { title: string; unit?: string | null; total?: number | null; due?: string | null; alreadyDone?: number }, now = Date.now()): Subtask | null {
+    if (!this.project(projectId)) return null;
+    const total = subtask.total ?? null;
+    const unit = total === null ? null : (subtask.unit ?? null);
+    const base = total === null ? 0 : Math.max(0, Math.min(total, Math.trunc(subtask.alreadyDone ?? 0)));
+    const position = (this.db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS next FROM subtasks WHERE project_id = ?').get(projectId) as { next: number }).next;
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO subtasks (project_id, title, unit, total, base, done_ms, due_day, position, created_ms) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)')
+      .run(projectId, subtask.title, unit, total, base, subtask.due ?? null, position, now);
+    return { id: Number(lastInsertRowid), projectId, title: subtask.title, unit, total, done: base, doneAt: null, due: subtask.due ?? null, position };
+  }
+
+  updateSubtask(id: number, change: SubtaskChange): Subtask | null {
+    const current = this.subtask(id);
+    if (!current) return null;
+    const total = change.total === undefined ? current.total : change.total;
+    // A measured sub-task with progress can't become a checkbox: its count would mean nothing.
+    if (current.total !== null && total === null && current.done !== 0) return null;
+    const unit = total === null ? null : change.unit === undefined ? current.unit : change.unit;
+    const title = change.title ?? current.title;
+    const due = change.due === undefined ? current.due : change.due;
+    this.db.prepare('UPDATE subtasks SET title = ?, unit = ?, total = ?, due_day = ? WHERE id = ?').run(title, unit, total, due, id);
+    return this.subtask(id);
+  }
+
+  /** Deletes a sub-task with its progress and plan. */
+  deleteSubtask(id: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM progress WHERE subtask_id = ?').run(id);
+      this.db.prepare('DELETE FROM targets WHERE subtask_id = ?').run(id);
+      return this.db.prepare('DELETE FROM subtasks WHERE id = ?').run(id).changes > 0;
+    })();
+  }
+
+  // Progress -----------------------------------------------------------------
+
+  /**
+   * Adds what you did on a measured sub-task that day (negative to correct a mistake).
+   * Null if the sub-task is missing, is a checkbox, or the count would drop below zero.
+   */
+  addProgress(subtaskId: number, day: string, amount: number, now = Date.now()): Subtask | null {
+    return this.db.transaction(() => {
+      const current = this.subtask(subtaskId);
+      if (!current || current.total === null || !Number.isInteger(amount) || amount === 0 || current.done + amount < 0) return null;
+      this.db.prepare('INSERT INTO progress (subtask_id, day, amount, created_ms) VALUES (?, ?, ?, ?)').run(subtaskId, day, amount, now);
+      return { ...current, done: current.done + amount };
+    })();
+  }
+
+  /**
+   * Sets what you did on a measured sub-task on one day to exactly `amount` (the evening
+   * log's box), replacing that day's earlier reports. Null as for addProgress.
+   */
+  setProgress(subtaskId: number, day: string, amount: number, now = Date.now()): Subtask | null {
+    return this.db.transaction(() => {
+      const current = this.subtask(subtaskId);
+      if (!current || current.total === null || !Number.isInteger(amount)) return null;
+      const before = (this.db.prepare('SELECT COALESCE(SUM(amount), 0) AS sum FROM progress WHERE subtask_id = ? AND day = ?').get(subtaskId, day) as { sum: number }).sum;
+      if (current.done - before + amount < 0) return null;
+      this.db.prepare('DELETE FROM progress WHERE subtask_id = ? AND day = ?').run(subtaskId, day);
+      if (amount !== 0) this.db.prepare('INSERT INTO progress (subtask_id, day, amount, created_ms) VALUES (?, ?, ?, ?)').run(subtaskId, day, amount, now);
+      return { ...current, done: current.done - before + amount };
+    })();
+  }
+
+  /** Ticks a checkbox sub-task off on a day, or un-ticks it. Null if missing or measured. */
+  setSubtaskDone(subtaskId: number, done: boolean, day: string, now = Date.now()): Subtask | null {
+    return this.db.transaction(() => {
+      const current = this.subtask(subtaskId);
+      if (!current || current.total !== null) return null;
+      if (done === current.done >= 1) return current;
+      // A checkbox's history is the day it was ticked; un-ticking clears it.
+      this.db.prepare('DELETE FROM progress WHERE subtask_id = ?').run(subtaskId);
+      this.db.prepare('UPDATE subtasks SET base = 0, done_ms = ? WHERE id = ?').run(done ? now : null, subtaskId);
+      if (done) this.db.prepare('INSERT INTO progress (subtask_id, day, amount, created_ms) VALUES (?, ?, 1, ?)').run(subtaskId, day, now);
+      return { ...current, done: done ? 1 : 0, doneAt: done ? now : null };
+    })();
+  }
+
+  /** Progress between two days, both included, for one project or all of them. */
+  progressBetween(fromDay: string, toDay: string, projectId?: number): (Progress & { projectId: number })[] {
+    const rows = this.db
+      .prepare(
+        `SELECT p.subtask_id, p.day, p.amount, s.project_id FROM progress p JOIN subtasks s ON s.id = p.subtask_id
+         WHERE p.day >= ? AND p.day <= ? ${projectId === undefined ? '' : 'AND s.project_id = ?'} ORDER BY p.day, p.id`,
+      )
+      .all(...(projectId === undefined ? [fromDay, toDay] : [fromDay, toDay, projectId])) as { subtask_id: number; day: string; amount: number; project_id: number }[];
+    return rows.map((r) => ({ subtaskId: r.subtask_id, day: r.day, amount: r.amount, projectId: r.project_id }));
+  }
+
+  // The daily answer per project -----------------------------------------------
+
+  projectDaysBetween(fromDay: string, toDay: string, projectId?: number): ProjectDay[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM project_days WHERE day >= ? AND day <= ? ${projectId === undefined ? '' : 'AND project_id = ?'} ORDER BY day, project_id`)
+      .all(...(projectId === undefined ? [fromDay, toDay] : [fromDay, toDay, projectId])) as { project_id: number; day: string; note: string | null; skipped: number }[];
+    return rows.map((r) => ({ projectId: r.project_id, day: r.day, note: r.note, skipped: r.skipped === 1 }));
+  }
+
+  /**
+   * Saves what you did on a project that day, or "nothing today". Fields left undefined
+   * keep what's there; writing a note clears a skip. Null if the project doesn't exist.
+   */
+  setProjectDay(projectId: number, day: string, change: { note?: string | null; skipped?: boolean }, now = Date.now()): ProjectDay | null {
+    if (!this.project(projectId)) return null;
+    const current = this.projectDaysBetween(day, day, projectId)[0];
+    const note = change.note === undefined ? (current?.note ?? null) : change.note?.trim() || null;
+    const skipped = change.skipped ?? (change.note ? false : (current?.skipped ?? false));
+    this.db
+      .prepare(
+        `INSERT INTO project_days (project_id, day, note, skipped, updated_ms) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (project_id, day) DO UPDATE SET note = excluded.note, skipped = excluded.skipped, updated_ms = excluded.updated_ms`,
+      )
+      .run(projectId, day, note, skipped ? 1 : 0, now);
+    return { projectId, day, note, skipped };
+  }
+
+  // The plan -------------------------------------------------------------------
+
+  targets(subtaskId: number): Target[] {
+    return (this.db.prepare('SELECT * FROM targets WHERE subtask_id = ? ORDER BY day').all(subtaskId) as { subtask_id: number; day: string; amount: number }[]).map((r) => ({
+      subtaskId: r.subtask_id,
+      day: r.day,
+      amount: r.amount,
+    }));
+  }
+
+  /** Every target between two days, both included, with its project. */
+  targetsBetween(fromDay: string, toDay: string, projectId?: number): (Target & { projectId: number })[] {
+    const rows = this.db
+      .prepare(
+        `SELECT t.subtask_id, t.day, t.amount, s.project_id FROM targets t JOIN subtasks s ON s.id = t.subtask_id
+         WHERE t.day >= ? AND t.day <= ? ${projectId === undefined ? '' : 'AND s.project_id = ?'} ORDER BY t.day, s.project_id, s.position`,
+      )
+      .all(...(projectId === undefined ? [fromDay, toDay] : [fromDay, toDay, projectId])) as { subtask_id: number; day: string; amount: number; project_id: number }[];
+    return rows.map((r) => ({ subtaskId: r.subtask_id, day: r.day, amount: r.amount, projectId: r.project_id }));
+  }
+
+  /** Sets one day's target for a sub-task; 0 removes it. False if the sub-task is missing. */
+  setTarget(subtaskId: number, day: string, amount: number): boolean {
+    if (!this.subtask(subtaskId)) return false;
+    if (amount <= 0) this.db.prepare('DELETE FROM targets WHERE subtask_id = ? AND day = ?').run(subtaskId, day);
+    else
+      this.db
+        .prepare('INSERT INTO targets (subtask_id, day, amount) VALUES (?, ?, ?) ON CONFLICT (subtask_id, day) DO UPDATE SET amount = excluded.amount')
+        .run(subtaskId, day, amount);
+    return true;
+  }
+
+  /** How many days without work before an active project is flagged (Settings; default 3). */
+  neglectAfterDays(): number {
+    try {
+      return mergeSettings(DEFAULT_SETTINGS, this.get('settings') ?? {}).projects.neglectAfterDays;
+    } catch {
+      return DEFAULT_SETTINGS.projects.neglectAfterDays;
+    }
+  }
+
+  /** Replaces a sub-task's targets from `fromDay` on; earlier days stay as they were. */
+  setTargets(subtaskId: number, fromDay: string, targets: Record<string, number>): void {
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM targets WHERE subtask_id = ? AND day >= ?').run(subtaskId, fromDay);
+      const insert = this.db.prepare('INSERT INTO targets (subtask_id, day, amount) VALUES (?, ?, ?)');
+      for (const [day, amount] of Object.entries(targets)) if (day >= fromDay && amount > 0) insert.run(subtaskId, day, amount);
+    })();
+  }
+
+  /** Creates a checked plan (see projectPlan.ts) in one go: all of it, or nothing. */
+  createProjectFromPlan(plan: NewProjectPlan, today: string, now = Date.now()): Project {
+    return this.db.transaction(() => {
+      const project = this.addProject({ name: plan.name, color: plan.color, due: plan.due }, now);
+      for (const s of plan.subtasks) this.addPlannedSubtask(project.id, s, today, now);
+      return project;
+    })();
+  }
+
+  /**
+   * Applies a checked re-plan: sub-tasks with an id get their details updated and their
+   * targets from today on replaced; the others are added. Progress is never touched.
+   */
+  applyPlan(projectId: number, plan: Replan, today: string, now = Date.now()): boolean {
+    return this.db.transaction(() => {
+      if (!this.project(projectId)) return false;
+      if (plan.due !== undefined) this.updateProject(projectId, { due: plan.due });
+      for (const s of plan.subtasks) {
+        if (s.id === undefined) {
+          this.addPlannedSubtask(projectId, s, today, now);
+          continue;
+        }
+        if (this.subtask(s.id)?.projectId !== projectId) throw new Error(`Sub-task ${s.id} isn't in project ${projectId}`);
+        this.updateSubtask(s.id, { title: s.title, unit: s.unit, total: s.total, due: s.due });
+        this.setTargets(s.id, today, s.targets);
+      }
+      return true;
+    })();
+  }
+
+  private addPlannedSubtask(projectId: number, s: PlannedSubtask, today: string, now: number): void {
+    const added = this.addSubtask(projectId, { title: s.title, unit: s.unit, total: s.total, due: s.due, alreadyDone: s.alreadyDone ?? 0 }, now);
+    if (added) this.setTargets(added.id, today, s.targets);
+  }
+
+  /**
+   * Everything about a project as of `today`: progress, pace, plan, and whether it's
+   * been neglected. History older than `historyDays` isn't read.
+   */
+  projectOverview(id: number, today: string, neglectAfterDays: number, historyDays = 120): ProjectOverview | null {
+    const project = this.project(id);
+    if (!project) return null;
+    const from = new Date(Date.parse(`${today}T12:00:00`) - historyDays * 86_400_000).toLocaleDateString('en-CA');
+    return overview(
+      project,
+      this.subtasks(id),
+      this.progressBetween(from, today, id),
+      this.targetsBetween('0000-01-01', '9999-12-31', id),
+      this.projectDaysBetween(from, today, id),
+      today,
+      neglectAfterDays,
+    );
+  }
+
+  projectOverviews(today: string, neglectAfterDays: number, status?: ProjectStatus): ProjectOverview[] {
+    return this.projects(status).flatMap((p) => this.projectOverview(p.id, today, neglectAfterDays) ?? []);
+  }
+
+  // Reminders --------------------------------------------------------------
+
+  reminders(): Reminder[] {
+    return (this.db.prepare('SELECT * FROM reminders ORDER BY id').all() as ReminderRow[]).map(reminderFromRow);
+  }
+
+  reminder(id: number): Reminder | null {
+    const row = this.db.prepare('SELECT * FROM reminders WHERE id = ?').get(id) as ReminderRow | undefined;
+    return row ? reminderFromRow(row) : null;
+  }
+
+  /** A new reminder starts counting from now, so it never fires for a time already past. */
+  addReminder(text: string, schedule: ReminderSchedule, enabled = true, now = Date.now()): Reminder {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO reminders (text, schedule, enabled, last_fired_ms, created_ms) VALUES (?, ?, ?, NULL, ?)')
+      .run(text, JSON.stringify(schedule), enabled ? 1 : 0, now);
+    return { id: Number(lastInsertRowid), text, schedule, enabled, lastFiredAt: null, createdAt: now };
+  }
+
+  /** Changing the schedule or switching it back on also starts counting from now. */
+  updateReminder(id: number, change: { text?: string; schedule?: ReminderSchedule; enabled?: boolean }, now = Date.now()): Reminder | null {
+    const current = this.reminder(id);
+    if (!current) return null;
+    const restart = change.schedule !== undefined || (change.enabled === true && !current.enabled);
+    const next = {
+      text: change.text ?? current.text,
+      schedule: change.schedule ?? current.schedule,
+      enabled: change.enabled ?? current.enabled,
+      lastFiredAt: restart ? now : current.lastFiredAt,
+    };
+    this.db
+      .prepare('UPDATE reminders SET text = ?, schedule = ?, enabled = ?, last_fired_ms = ? WHERE id = ?')
+      .run(next.text, JSON.stringify(next.schedule), next.enabled ? 1 : 0, next.lastFiredAt, id);
+    return { ...current, ...next };
+  }
+
+  deleteReminder(id: number): boolean {
+    return this.db.prepare('DELETE FROM reminders WHERE id = ?').run(id).changes > 0;
+  }
+
+  markFired(id: number, at: number): void {
+    this.db.prepare('UPDATE reminders SET last_fired_ms = ? WHERE id = ?').run(at, id);
+  }
+
+  // Settings and small bits of state ----------------------------------------
+
+  get(key: string): unknown {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    if (!row) return undefined;
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return undefined;
+    }
+  }
+
+  set(key: string, value: unknown): void {
+    this.db
+      .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
+      .run(key, JSON.stringify(value));
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "رقيب (Raqib)",
+  "version": "0.3.0",
+  "description": "Tells رقيب, your own tracker on 127.0.0.1, which tab is active, what each window shows, and which tabs are playing sound. Never sends anything elsewhere.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "incognito": "not_allowed",
+  "background": {
+    "service_worker": "build/background.js",
+    "type": "module"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

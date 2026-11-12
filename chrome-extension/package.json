@@ -1,0 +1,15 @@
+{
+  "name": "@activity-tracker/chrome-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.43",
+    "@types/node": "^24.19.2"
+  }
+}

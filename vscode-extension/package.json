@@ -1,0 +1,41 @@
+{
+  "name": "activity-tracker-vscode",
+  "displayName": "رقيب (Raqib)",
+  "description": "Tells رقيب, your own activity tracker on 127.0.0.1 which project, language, and git branch you're working in. Never sends file contents.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./build/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "activityTracker.showStatus",
+        "title": "Activity Tracker: Show Status"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\"",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --skip-license -o build/activity-tracker.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^4.1.0"
+  }
+}

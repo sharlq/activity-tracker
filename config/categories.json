@@ -1,0 +1,30 @@
+{
+  "focus": ["work", "learning", "debate"],
+  "distraction": ["social media", "video", "news", "gaming", "game launcher"],
+  "rules": [
+    { "category": "gaming", "gaming": "game" },
+    { "category": "game launcher", "gaming": "launcher" },
+    { "category": "game launcher", "process": ["Riot Client", "RiotClientServices", "LeagueClientUx", "LeagueClient"], "note": "Riot isn't one of the built-in launchers" },
+    { "category": "gaming", "exePath": "\\Riot Games\\" },
+
+    { "category": "work", "project": "*", "note": "Any VS Code or Cursor workspace" },
+    { "category": "work", "process": ["Cursor", "Code", "claude", "ChatGPT", "WindowsTerminal", "powershell", "cmd"] },
+    { "category": "work", "domain": ["github.com", "atlassian.net", "edways.com", "claude.ai", "chatgpt.com", "stackoverflow.com", "localhost", "127.0.0.1"] },
+
+    { "category": "learning", "domain": ["udemy.com", "coursera.org", "wikipedia.org", "aws.amazon.com", "developer.mozilla.org", "khanacademy.org"] },
+    { "category": "learning", "title": ["Certified", "Certification", "Tutorial", "Course"] },
+
+    { "category": "debate", "domain": ["qatardebate.org"] },
+    { "category": "debate", "title": ["debate", "مناظرة"] },
+
+    { "category": "video", "domain": ["youtube.com", "twitch.tv", "netflix.com", "primevideo.com", "disneyplus.com", "shahid.mbc.net"] },
+    { "category": "video", "process": ["vlc", "Netflix"] },
+
+    { "category": "social media", "domain": ["facebook.com", "instagram.com", "x.com", "twitter.com", "reddit.com", "tiktok.com", "linkedin.com", "snapchat.com", "threads.net"] },
+
+    { "category": "messaging", "domain": ["web.whatsapp.com", "web.telegram.org", "discord.com", "mail.google.com", "outlook.live.com"] },
+    { "category": "messaging", "process": ["WhatsApp", "WhatsApp.Root", "Telegram", "Discord", "slack", "ms-teams", "Teams"], "note": "The Microsoft Store WhatsApp app runs as WhatsApp.Root.exe" },
+
+    { "category": "news", "domain": ["bbc.com", "bbc.co.uk", "cnn.com", "aljazeera.com", "aljazeera.net", "news.google.com", "reuters.com", "theguardian.com"] }
+  ]
+}

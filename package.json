@@ -1,0 +1,24 @@
+{
+  "name": "raqib",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "tracker",
+    "cli",
+    "chrome-extension",
+    "vscode-extension"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "postbuild": "node tracker/dist/main.js shortcut",
+    "test": "npm test --workspaces",
+    "start": "node tracker/dist/main.js run",
+    "raqib": "node tracker/dist/main.js",
+    "tracker": "node tracker/dist/main.js",
+    "report": "node cli/dist/main.js"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "description": "رقيب (Raqib): a local-only record of how you spend your day on your Windows PC"
+}

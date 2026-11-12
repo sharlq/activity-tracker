@@ -1,0 +1,16 @@
+{
+  "name": "@activity-tracker/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "report": "dist/main.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build -w @activity-tracker/tracker",
+    "test": "tsc --noEmit && node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@activity-tracker/tracker": "*"
+  }
+}

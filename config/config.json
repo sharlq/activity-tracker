@@ -1,0 +1,22 @@
+{
+  "pollIntervalMs": 5000,
+  "idleThresholdMs": 120000,
+  "exclude": {
+    "apps": [],
+    "titleContains": [
+      "Incognito",
+      "InPrivate",
+      "Private Browsing"
+    ],
+    "domains": []
+  },
+  "gaming": {
+    "games": []
+  },
+  "browser": {
+    "fullUrlDomains": []
+  },
+  "api": {
+    "port": 5610
+  }
+}

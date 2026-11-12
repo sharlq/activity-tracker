@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>رقيب settings</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #1f2328; }
+      h1 { font-size: 1.3rem; }
+      label { display: block; margin-top: 1rem; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; padding: 0.4rem; font: 13px ui-monospace, monospace; }
+      button { margin-top: 1rem; padding: 0.4rem 1rem; }
+      .hint { color: #59636e; font-size: 0.9em; }
+      .ok { color: #1a7f37; }
+      .error { color: #cf222e; }
+    </style>
+  </head>
+  <body>
+    <h1>رقيب (Raqib)</h1>
+    <p class="hint">
+      Get the port and token by running <code>npm run raqib -- token</code> in the tracker folder.
+      This extension only ever talks to 127.0.0.1 and never reports private windows.
+    </p>
+    <form>
+      <label for="port">Port</label>
+      <input id="port" inputmode="numeric" required />
+      <label for="token">Token</label>
+      <input id="token" autocomplete="off" spellcheck="false" required />
+      <button type="submit">Save and test connection</button>
+    </form>
+    <p id="result" role="status"></p>
+    <h2 style="font-size: 1rem">Last report</h2>
+    <p id="last-report" role="status"></p>
+    <script type="module" src="build/options.js"></script>
+  </body>
+</html>

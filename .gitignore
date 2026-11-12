@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+config/api-token.txt
+chrome-extension/build/
+vscode-extension/build/
+report-*.md
+day-*.md
+test.md
