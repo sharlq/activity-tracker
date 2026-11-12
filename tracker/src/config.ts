@@ -14,6 +14,10 @@ export interface Config {
   gaming: { games: string[] };
   browser: { fullUrlDomains: string[] };
   api: { port: number };
+  /** Daily database copies: where (default: backups in the data folder) and how many to keep. */
+  backup: { folder?: string; keep: number };
+  /** Apps you read in (PDF readers), and how long without input there before you count as idle. */
+  reading: { apps: string[]; idleThresholdMs: number };
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -23,7 +27,17 @@ export const DEFAULT_CONFIG: Config = {
   gaming: { games: [] },
   browser: { fullUrlDomains: [] },
   api: { port: 5610 },
+  backup: { keep: 14 },
+  reading: { apps: ['FoxitPDFReader', 'Acrobat', 'AcroRd32', 'SumatraPDF', 'PDFXEdit'], idleThresholdMs: 600000 },
 };
+
+function backupSection(raw: Record<string, unknown>): Config['backup'] {
+  const folder = raw['folder'];
+  if (folder !== undefined && (typeof folder !== 'string' || folder.trim() === '')) throw new Error('backup.folder must be a folder path');
+  const keep = raw['keep'] === undefined ? DEFAULT_CONFIG.backup.keep : raw['keep'];
+  if (!Number.isInteger(keep) || (keep as number) < 1) throw new Error('backup.keep must be a whole number of 1 or more');
+  return { ...(typeof folder === 'string' ? { folder: folder.trim() } : {}), keep: keep as number };
+}
 
 /** tracker/src and tracker/dist are the same depth, so these work from both. */
 export const CONFIG_FILE = fileURLToPath(new URL('../../config/config.json', import.meta.url));
@@ -105,6 +119,15 @@ export function parseConfig(text: string): Config {
       fullUrlDomains: domainList(section(root, 'browser')['fullUrlDomains'], 'browser.fullUrlDomains'),
     },
     api: { port: port(section(root, 'api')['port'], 'api.port', DEFAULT_CONFIG.api.port) },
+    backup: backupSection(section(root, 'backup')),
+    reading: readingSection(section(root, 'reading')),
+  };
+}
+
+function readingSection(raw: Record<string, unknown>): Config['reading'] {
+  return {
+    apps: raw['apps'] === undefined ? DEFAULT_CONFIG.reading.apps : stringList(raw['apps'], 'reading.apps'),
+    idleThresholdMs: positiveNumber(raw['idleThresholdMs'], 'reading.idleThresholdMs', DEFAULT_CONFIG.reading.idleThresholdMs),
   };
 }
 

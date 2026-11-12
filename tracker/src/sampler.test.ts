@@ -20,17 +20,42 @@ const RULES: SampleRules = {
   exclude: { apps: [], titleContains: [], domains: [] },
   gaming: { games: [] },
   browser: { fullUrlDomains: [] },
+  reading: { apps: ['FoxitPDFReader'], idleThresholdMs: 600_000 },
 };
 
-function probe(overrides: Partial<{ locked: boolean; window: ForegroundWindow | null; idleMs: number }> = {}): SystemProbe {
-  const { locked = false, window = WINDOW, idleMs = 0 } = overrides;
+function probe(overrides: Partial<{ locked: boolean; window: ForegroundWindow | null; idleMs: number; mic: string[] }> = {}): SystemProbe {
+  const { locked = false, window = WINDOW, idleMs = 0, mic } = overrides;
   return {
     isSessionLocked: () => locked,
     foregroundWindow: () => window,
     idleMs: () => idleMs,
     readGamepad: () => null,
+    ...(mic ? { microphoneUsers: () => mic } : {}),
   };
 }
+
+const TEAMS: ForegroundWindow = { processName: 'ms-teams.exe', exePath: 'C:\\Program Files\\WindowsApps\\MSTeams\\ms-teams.exe', title: 'Daily Scrum | Microsoft Teams' };
+const FOXIT: ForegroundWindow = { processName: 'FoxitPDFReader.exe', exePath: 'C:\\Program Files\\Foxit\\FoxitPDFReader.exe', title: 'AWS Certified Solutions Architect Slides v48.pdf - Foxit PDF Reader' };
+
+describe('sample: calls and reading', () => {
+  it('is never idle on a call, and names the call app', () => {
+    const result = sample(probe({ window: TEAMS, idleMs: 30 * 60_000, mic: ['MSTeams'] }), RULES, NOW);
+    assert.deepEqual(result.activity, { kind: 'window', ...TEAMS, call: 'MSTeams' });
+    assert.equal(result.talking, true);
+  });
+
+  it('ignores noise filters, and counts dictation as presence but not a call', () => {
+    assert.equal((sample(probe({ window: TEAMS, idleMs: 30 * 60_000, mic: ['ArmouryCrate.DenoiseAI'] }), RULES, NOW).activity as { kind: string }).kind, 'idle');
+    const dictating = sample(probe({ idleMs: 5 * 60_000, mic: ['Claude', 'ArmouryCrate.DenoiseAI'] }), RULES, NOW);
+    assert.deepEqual(dictating.activity, { kind: 'window', ...WINDOW });
+  });
+
+  it('waits longer before counting you idle in a PDF reader', () => {
+    assert.equal((sample(probe({ window: FOXIT, idleMs: 5 * 60_000 }), RULES, NOW).activity as { kind: string }).kind, 'window');
+    assert.equal((sample(probe({ window: FOXIT, idleMs: 10 * 60_000 }), RULES, NOW).activity as { kind: string }).kind, 'idle');
+    assert.equal((sample(probe({ idleMs: 5 * 60_000 }), RULES, NOW).activity as { kind: string }).kind, 'idle');
+  });
+});
 
 const withExclude = (exclude: Partial<SampleRules['exclude']>): SampleRules => ({
   ...RULES,

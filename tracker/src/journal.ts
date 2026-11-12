@@ -75,6 +75,17 @@ export interface Goal {
   result: GoalResult | null;
 }
 
+/** A stretch of the day you planned: "09:00–11:00 Study for the exam (study)". */
+export interface PlanBlock {
+  id: number;
+  /** The day it's planned for, YYYY-MM-DD. It starts on that day, and may run past midnight. */
+  day: string;
+  start: number;
+  end: number;
+  label: string;
+  category: string | null;
+}
+
 /** What you wrote looking back on a week. `week` is its Monday. */
 export interface Review {
   week: string;
@@ -149,6 +160,8 @@ type ProjectRow = {
   due_day: string | null;
   position: number;
   created_ms: number;
+  /** JSON list of match words; absent before the column existed. */
+  match_words?: string | null;
 };
 type SubtaskRow = {
   id: number;
@@ -169,7 +182,17 @@ const projectFromRow = (r: ProjectRow): Project => ({
   due: r.due_day,
   position: r.position,
   createdAt: r.created_ms,
+  match: matchWords(r.match_words),
 });
+function matchWords(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    const list = JSON.parse(json) as unknown;
+    return Array.isArray(list) ? list.filter((w): w is string => typeof w === 'string' && w.trim() !== '') : [];
+  } catch {
+    return [];
+  }
+}
 const subtaskFromRow = (r: SubtaskRow): Subtask => ({
   id: r.id,
   projectId: r.project_id,
@@ -189,6 +212,8 @@ export interface ProjectChange {
   color?: string | null;
   status?: ProjectStatus;
   due?: string | null;
+  /** Words that make PC time count toward it; [] clears them. */
+  match?: string[];
 }
 
 /** A change to a sub-task. Fields left undefined stay as they are. */
@@ -199,6 +224,9 @@ export interface SubtaskChange {
   total?: number | null;
   due?: string | null;
 }
+
+type PlanRow = { id: number; day: string; start_ms: number; end_ms: number; label: string; category: string | null };
+const planFromRow = (r: PlanRow): PlanBlock => ({ id: r.id, day: r.day, start: r.start_ms, end: r.end_ms, label: r.label, category: r.category });
 
 const taskFromRow = (row: TaskRow): Task => ({ id: row.id, day: row.day, text: row.text, doneAt: row.done_ms });
 const reminderFromRow = (row: ReminderRow): Reminder => ({
@@ -272,6 +300,11 @@ export class Journal {
   }
 
   addEntry(entry: Omit<Entry, 'id'>, now = Date.now()): Entry {
+    // The same answer sent twice (a double click, a retried request) is saved once.
+    const same = this.db
+      .prepare('SELECT id, category FROM entries WHERE start_ms = ? AND end_ms = ? AND label = ? LIMIT 1')
+      .get(entry.start, entry.end, entry.label) as { id: number; category: string | null } | undefined;
+    if (same) return { ...entry, id: same.id, category: same.category };
     const { lastInsertRowid } = this.db
       .prepare('INSERT INTO entries (start_ms, end_ms, label, category, created_ms) VALUES (?, ?, ?, ?, ?)')
       .run(entry.start, entry.end, entry.label, entry.category, now);
@@ -398,6 +431,74 @@ export class Journal {
     return this.db.prepare('DELETE FROM goals WHERE id = ?').run(id).changes > 0;
   }
 
+  // The day's plan -----------------------------------------------------------
+
+  planBlocks(day: string): PlanBlock[] {
+    return this.planBlocksBetween(day, day);
+  }
+
+  /** Every planned block from one day to another, both included, in time order. */
+  planBlocksBetween(fromDay: string, toDay: string): PlanBlock[] {
+    const rows = this.db.prepare('SELECT * FROM plan_blocks WHERE day >= ? AND day <= ? ORDER BY start_ms, id').all(fromDay, toDay) as PlanRow[];
+    return rows.map(planFromRow);
+  }
+
+  planBlock(id: number): PlanBlock | null {
+    const row = this.db.prepare('SELECT * FROM plan_blocks WHERE id = ?').get(id) as PlanRow | undefined;
+    return row ? planFromRow(row) : null;
+  }
+
+  addPlanBlock(block: Omit<PlanBlock, 'id'>, now = Date.now()): PlanBlock {
+    // The same block sent twice (a double click, a retried request) is saved once.
+    const same = this.db
+      .prepare('SELECT * FROM plan_blocks WHERE day = ? AND start_ms = ? AND end_ms = ? AND label = ? LIMIT 1')
+      .get(block.day, block.start, block.end, block.label) as PlanRow | undefined;
+    if (same) return planFromRow(same);
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO plan_blocks (day, start_ms, end_ms, label, category, created_ms) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(block.day, block.start, block.end, block.label, block.category, now);
+    return { ...block, id: Number(lastInsertRowid) };
+  }
+
+  /** Changes a block's time, label, or category. Its day stays. */
+  updatePlanBlock(id: number, change: { start?: number; end?: number; label?: string; category?: string | null }): PlanBlock | null {
+    const current = this.planBlock(id);
+    if (!current) return null;
+    const next: PlanBlock = {
+      ...current,
+      start: change.start ?? current.start,
+      end: change.end ?? current.end,
+      label: change.label ?? current.label,
+      category: change.category === undefined ? current.category : change.category,
+    };
+    if (next.end <= next.start) return null;
+    this.db
+      .prepare('UPDATE plan_blocks SET start_ms = ?, end_ms = ?, label = ?, category = ? WHERE id = ?')
+      .run(next.start, next.end, next.label, next.category, id);
+    return next;
+  }
+
+  deletePlanBlock(id: number): boolean {
+    return this.db.prepare('DELETE FROM plan_blocks WHERE id = ?').run(id).changes > 0;
+  }
+
+  /**
+   * Copies one day's plan to another at the same clock times, skipping blocks already
+   * there. `shift` moves a time from the first day to the second (DST-safe in the caller).
+   */
+  copyPlan(fromDay: string, toDay: string, shift: (ms: number) => number, now = Date.now()): PlanBlock[] {
+    return this.db.transaction(() => {
+      const existing = new Set(this.planBlocks(toDay).map((b) => `${b.start}|${b.label}`));
+      const added: PlanBlock[] = [];
+      for (const b of this.planBlocks(fromDay)) {
+        const start = shift(b.start);
+        if (existing.has(`${start}|${b.label}`)) continue;
+        added.push(this.addPlanBlock({ day: toDay, start, end: shift(b.end), label: b.label, category: b.category }, now));
+      }
+      return added;
+    })();
+  }
+
   // Weekly reviews -----------------------------------------------------------
 
   review(week: string): Review | null {
@@ -446,7 +547,7 @@ export class Journal {
     const { lastInsertRowid } = this.db
       .prepare("INSERT INTO projects (name, color, status, due_day, position, created_ms) VALUES (?, ?, 'active', ?, ?, ?)")
       .run(project.name, project.color ?? null, project.due ?? null, position, now);
-    return { id: Number(lastInsertRowid), name: project.name, color: project.color ?? null, status: 'active', due: project.due ?? null, position, createdAt: now };
+    return { id: Number(lastInsertRowid), name: project.name, color: project.color ?? null, status: 'active', due: project.due ?? null, position, createdAt: now, match: [] };
   }
 
   updateProject(id: number, change: ProjectChange): Project | null {
@@ -458,8 +559,11 @@ export class Journal {
       color: change.color === undefined ? current.color : change.color,
       status: change.status ?? current.status,
       due: change.due === undefined ? current.due : change.due,
+      match: change.match === undefined ? current.match : change.match,
     };
-    this.db.prepare('UPDATE projects SET name = ?, color = ?, status = ?, due_day = ? WHERE id = ?').run(next.name, next.color, next.status, next.due, id);
+    this.db
+      .prepare('UPDATE projects SET name = ?, color = ?, status = ?, due_day = ?, match_words = ? WHERE id = ?')
+      .run(next.name, next.color, next.status, next.due, next.match.length ? JSON.stringify(next.match) : null, id);
     return next;
   }
 

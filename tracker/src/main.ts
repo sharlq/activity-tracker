@@ -24,6 +24,7 @@ const USAGE = `رقيب (Raqib), your activity tracker. Usage:
   raqib run                           Start tracking in this window (Ctrl+C to stop)
   raqib recent [count]                Show the newest events (default 20)
   raqib purge --before YYYY-MM-DD     Permanently delete events that ended before that day
+  raqib backup                        Copy the database now (one is also made each day)
   raqib token                         Show the API port and token for the extensions
   raqib claude [--date YYYY-MM-DD]    Show Claude Code sessions for a day (default today)
 
@@ -45,6 +46,7 @@ async function run(): Promise<number> {
   // Loaded here so that purge and recent never touch Win32.
   const { acquireSingleInstance, processInfo, win32Probe, win32Screens } = await import('./win32.ts');
   const { readAudioSessions } = await import('./win32Audio.ts');
+  const { microphoneUsers } = await import('./win32Mic.ts');
   const { windowsNotifier } = await import('./notify.ts');
   const { openUrl } = await import('./launch.ts');
   const { startService } = await import('./service.ts');
@@ -70,7 +72,7 @@ async function run(): Promise<number> {
     service.stop();
     process.exit(0);
   };
-  const service = startService(config, win32Probe, logger, {
+  const service = startService(config, { ...win32Probe, microphoneUsers }, logger, {
     apiToken: loadOrCreateToken(),
     tokenFile: TOKEN_FILE,
     onStopRequested: () => shutdown('Stopping on request'),
@@ -78,6 +80,7 @@ async function run(): Promise<number> {
     openWindow: openUrl,
     audio: { readSessions: readAudioSessions, processInfo },
     screens: win32Screens,
+    backups: true,
   });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) {
     process.on(signal, () => shutdown(`Received ${signal}`));
@@ -195,6 +198,17 @@ async function claude(args: string[]): Promise<number> {
   return 0;
 }
 
+async function backup(): Promise<number> {
+  const { backupFolder, backUp, listBackups } = await import('./backup.ts');
+  const config = loadConfig();
+  const folder = backupFolder(config);
+  const file = await backUp(join(dataDir(), 'data.db'), folder, new Date().toLocaleDateString('en-CA'), config.backup.keep, true);
+  console.log(`Backed up to ${file}`);
+  console.log(`Keeping the newest ${config.backup.keep}: ${listBackups(folder).map((b) => b.day).join(', ')}`);
+  console.log('To restore one: "raqib stop", copy it over data.db in the data folder, then "raqib start".');
+  return 0;
+}
+
 function purge(args: string[]): number {
   const dateArg = args[0] === '--before' ? args[1] : undefined;
   const cutoff = dateArg === undefined ? null : parseLocalDate(dateArg);
@@ -225,6 +239,8 @@ async function main(): Promise<number> {
       return recent(args[0]);
     case 'purge':
       return purge(args);
+    case 'backup':
+      return backup();
     case 'token':
       return token();
     case 'claude':

@@ -9,6 +9,7 @@
 //   domain    a site, including its subdomains ("youtube.com"); "*" = any site
 //   project   an editor workspace name, any case; "*" = any project
 //   gaming    "game" or "launcher", using the gaming rules from config.json
+//   call      the app holding the microphone ("MSTeams", "Zoom"); "*" = any call
 import { readFileSync } from 'node:fs';
 import type { Activity } from '../merger.ts';
 import { domainMatches } from '../browser.ts';
@@ -21,15 +22,17 @@ export const CATEGORIES = [
   'social media',
   'video',
   'news',
+  'entertainment',
   'gaming',
   'game launcher',
   'messaging',
+  'meeting',
   'other',
   'idle',
 ] as const;
 export type Category = (typeof CATEGORIES)[number];
 
-const CONDITIONS = ['process', 'exePath', 'title', 'domain', 'project', 'gaming'] as const;
+const CONDITIONS = ['process', 'exePath', 'title', 'domain', 'project', 'gaming', 'call'] as const;
 type Condition = (typeof CONDITIONS)[number];
 
 export interface Rule {
@@ -120,6 +123,8 @@ function conditionHolds(condition: Condition, wanted: string, window: WindowActi
       const kind = classifyGaming(window, games)?.category;
       return wanted === 'game' ? kind === 'gaming' : kind === 'game launcher';
     }
+    case 'call':
+      return window.call !== undefined && (wanted === '*' || contains(window.call, wanted));
   }
 }
 
@@ -138,6 +143,7 @@ export function detailOf(activity: Activity, games: string[]): string {
   // Idle time is labelled with what was on screen, if anything.
   if (activity.kind === 'idle') return activity.window ? detailOf({ kind: 'window', ...activity.window }, games) : 'idle';
   const game = classifyGaming(activity, games);
+  if (activity.call) return `call: ${activity.call}`;
   if (activity.project) return activity.project;
   if (game?.category === 'gaming') return game.gameName;
   if (activity.domain) return activity.domain;

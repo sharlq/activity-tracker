@@ -20,12 +20,12 @@ export function openJournal(): Journal {
 
 export function parseDay(text: string | undefined, now = Date.now()): string {
   if (text === undefined || text === 'today') return dayKey(now);
-  if (text === 'yesterday') {
+  if (text === 'yesterday' || text === 'tomorrow') {
     const d = new Date(now);
-    d.setDate(d.getDate() - 1);
+    d.setDate(d.getDate() + (text === 'tomorrow' ? 1 : -1));
     return dayKey(d.getTime());
   }
-  if (parseLocalDate(text) === null) throw new UsageError(`"${text}" is not a date. Use YYYY-MM-DD, today, or yesterday.`);
+  if (parseLocalDate(text) === null) throw new UsageError(`"${text}" is not a date. Use YYYY-MM-DD, today, yesterday, or tomorrow.`);
   return text;
 }
 

@@ -17,7 +17,11 @@ export type ReminderSchedule =
 
 export interface PlannerSettings {
   morning: { enabled: boolean; from: ClockTime; until: ClockTime };
-  evening: { enabled: boolean; at: ClockTime };
+  /**
+   * The evening log goes out at `at`, or the first moment after it you're at the PC,
+   * but not after `lateAfter`: that late, it waits for the morning page instead.
+   */
+  evening: { enabled: boolean; at: ClockTime; lateAfter: ClockTime };
   /** Stretches without PC activity shorter than this aren't asked about. */
   gaps: { minMinutes: number };
   audio: { enabled: boolean };
@@ -35,7 +39,7 @@ export type BackMode = 'window' | 'toast' | 'off';
 
 export const DEFAULT_SETTINGS: PlannerSettings = {
   morning: { enabled: true, from: '08:00', until: '12:00' },
-  evening: { enabled: true, at: '22:00' },
+  evening: { enabled: true, at: '22:00', lateAfter: '23:00' },
   gaps: { minMinutes: 15 },
   audio: { enabled: true },
   screens: { enabled: true },
@@ -206,7 +210,10 @@ export function morningDue(settings: PlannerSettings, state: PlannerState, now: 
 /** The evening log goes out once a day, at the set time or the first moment after it the PC is in use. */
 export function eveningDue(settings: PlannerSettings, state: PlannerState, now: number, activeNow: boolean): boolean {
   if (!settings.evening.enabled || !activeNow || state.eveningShown === dayKey(now)) return false;
-  return now >= atClock(now, settings.evening.at);
+  const at = atClock(now, settings.evening.at);
+  const late = atClock(now, settings.evening.lateAfter);
+  // A cut-off at or before the evening time means no cut-off.
+  return now >= at && (late <= at || now < late);
 }
 
 /**
@@ -251,7 +258,11 @@ export function mergeSettings(current: PlannerSettings, raw: unknown): PlannerSe
       from: clock(morning['from'], current.morning.from),
       until: clock(morning['until'], current.morning.until),
     },
-    evening: { enabled: bool(evening['enabled'], current.evening.enabled), at: clock(evening['at'], current.evening.at) },
+    evening: {
+      enabled: bool(evening['enabled'], current.evening.enabled),
+      at: clock(evening['at'], current.evening.at),
+      lateAfter: clock(evening['lateAfter'], current.evening.lateAfter ?? DEFAULT_SETTINGS.evening.lateAfter),
+    },
     gaps: { minMinutes: current.gaps.minMinutes },
     audio: { enabled: bool(audio['enabled'], current.audio.enabled) },
     screens: { enabled: bool(screens['enabled'], current.screens.enabled) },

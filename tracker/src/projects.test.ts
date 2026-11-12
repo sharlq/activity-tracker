@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Journal } from './journal.ts';
 import { checkNewProject, checkReplan } from './projectPlan.ts';
 import type { Progress, Target } from './projects.ts';
-import { addDays, answered, daysBetween, neglectedFor, paceTo, planStatus, projectedFinish, projectFraction, subtaskFraction } from './projects.ts';
+import { addDays, answered, daysBetween, matchesProject, neglectedFor, paceTo, pcTimeByProject, planStatus, projectedFinish, projectFraction, subtaskFraction } from './projects.ts';
 import { Store } from './store.ts';
 
 describe('project logic', () => {
@@ -336,5 +336,28 @@ describe('work done before tracking began', () => {
     const over = checkNewProject({ name: 'AWS', subtasks: [{ title: 'Slides', total: 876, unit: 'slides', done: 266, targets: { '2026-11-11': 611 } }] }, '2026-11-10');
     assert.ok(!over.ok && over.errors[0]?.includes('only 610 slides left'));
     assert.ok(!checkNewProject({ name: 'AWS', subtasks: [{ title: 'Tick', done: 1 }] }, '2026-11-10').ok);
+  });
+});
+
+describe('project time from the PC', () => {
+  const win = (title: string, extra: Record<string, string> = {}) => ({ kind: 'window' as const, processName: 'FoxitPDFReader.exe', exePath: null, title, ...extra });
+
+  it('matches a title, a site, an app, or a workspace, ignoring case', () => {
+    assert.ok(matchesProject(win('AWS Certified Solutions Architect Slides v48.pdf'), ['aws certified']));
+    assert.ok(matchesProject({ ...win('Docs'), processName: 'chrome.exe', domain: 'docs.aws.amazon.com' }, ['aws.amazon.com']));
+    assert.ok(matchesProject(win('anything'), ['FoxitPDFReader']));
+    assert.ok(matchesProject({ ...win('x'), processName: 'Code.exe', project: 'Debate-Lecture' }, ['debate-lecture']));
+    assert.ok(!matchesProject(win('Invoice.pdf'), ['aws certified', '']));
+  });
+
+  it('adds up active time per project, first match wins, idle never counts', () => {
+    const events = [
+      { start: 0, end: 30 * 60_000, activity: win('AWS Certified Slides.pdf') },
+      { start: 30 * 60_000, end: 50 * 60_000, activity: { kind: 'idle' as const, window: win('AWS Certified Slides.pdf') } },
+      { start: 50 * 60_000, end: 60 * 60_000, activity: win('Lecture on AWS Certified debate') },
+    ];
+    const time = pcTimeByProject(events, [{ id: 1, match: ['AWS Certified'] }, { id: 2, match: ['debate'] }, { id: 3, match: [] }], 10 * 60_000, 24 * 3600_000);
+    assert.equal(time.get(1), 30 * 60_000);
+    assert.equal(time.get(2), undefined);
   });
 });

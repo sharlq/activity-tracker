@@ -63,6 +63,15 @@ export const status: Command = async () => {
     console.log(`Last event:  ${last ? `${new Date(last.end).toLocaleString('en-GB')} (${ago(last.end)}), ${what}` : 'none yet'}`);
     const total = sizeOf(database) + sizeOf(`${database}-wal`) + sizeOf(`${database}-shm`);
     console.log(`Database:    ${megabytes(total)}  (${database})`);
+    try {
+      const { backupFolder, listBackups } = await import('./backup.ts');
+      const { loadConfig } = await import('./config.ts');
+      const backups = listBackups(backupFolder(loadConfig()));
+      const newest = backups[0];
+      console.log(`Backups:     ${newest ? `${backups.length}, newest ${newest.day}  (${newest.path})` : 'none yet (one is made each day while رقيب runs; "raqib backup" makes one now)'}`);
+    } catch {
+      // A config problem is reported by the tracker itself.
+    }
   } else {
     console.log('Last event:  none yet (no database)');
   }

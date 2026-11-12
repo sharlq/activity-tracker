@@ -7,25 +7,40 @@
 // which this server never approves, and SameSite=Strict keeps the cookie off
 // requests they start. The Host check in api.ts has already run.
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError, readJson, send } from './api.ts';
+import { addToCategories } from './categoryEdit.ts';
 import { readClaudeSessions } from './claudeSessions.ts';
 import type { Config } from './config.ts';
 import { categoriesFile } from './config.ts';
 import { parseLocalDate } from './dates.ts';
-import type { Checkin, CheckinPart, Goal, GoalResult, Journal, Reminder, Review } from './journal.ts';
+import type { PlanComparison } from './dayPlan.ts';
+import { comparePlan } from './dayPlan.ts';
+import type { Checkin, CheckinPart, Goal, GoalResult, Journal, PlanBlock, Reminder, Review } from './journal.ts';
 import type { Logger } from './logger.ts';
 import type { PlannerSettings, PlannerState } from './planner.ts';
 import { DEFAULT_SETTINGS, dayKey, jobWindow, mergeSettings, nextSlot, parseSchedule } from './planner.ts';
 import type { ProjectWeek } from './projects.ts';
-import { projectWeek } from './projects.ts';
+import { pcTimeByProject, projectWeek } from './projects.ts';
 import { EventReader } from './reader.ts';
 import { projectRoutes } from './uiProjects.ts';
-import type { DayFigures, Gap, Report, Sleep, WeekTotals } from './report/index.ts';
-import { buildReport, CATEGORIES, findGaps, loadCategories, mondayOf, nightWindow, observations, sleepFor, toSegments, weekTotals } from './report/index.ts';
+import type { Category, DayFigures, Gap, LoggedDistraction, Report, Segment, Sleep, WeekTotals } from './report/index.ts';
+import {
+  buildReport,
+  CATEGORIES,
+  findGaps,
+  loadCategories,
+  loggedDistraction,
+  mondayOf,
+  nightWindow,
+  observations,
+  sleepFor,
+  toSegments,
+  weekTotals,
+} from './report/index.ts';
 
 const STATIC_DIR = fileURLToPath(new URL('../ui/', import.meta.url));
 const STATIC_FILES: Record<string, string> = {
@@ -100,6 +115,43 @@ export function readState(journal: Journal): PlannerState {
 
 // ------------------------------------------------------------------ the day
 
+export interface Uncategorised {
+  /** What to add to a rule: a site ("hubspot.com") or an app ("pgAdmin4"). */
+  name: string;
+  kind: 'domain' | 'process';
+  ms: number;
+}
+
+/** Browsers and the shell say nothing on their own: a rule for "chrome" would swallow every site. */
+const TOO_BROAD = new Set(['chrome', 'msedge', 'firefox', 'brave', 'opera', 'explorer', 'unknown', 'applicationframehost', 'searchhost', 'searchapp', 'shellexperiencehost', 'startmenuexperiencehost', 'lockapp']);
+
+/** "app-eu1.hubspot.com" → "hubspot.com"; "bbc.co.uk" stays. */
+export function baseDomain(domain: string): string {
+  const parts = domain.toLowerCase().split('.');
+  if (parts.length <= 2 || /^\d+$/.test(parts.at(-1) as string)) return domain.toLowerCase();
+  const secondLevel = parts.at(-2) as string;
+  const keep = (parts.at(-1) as string).length === 2 && ['co', 'com', 'org', 'net', 'ac', 'gov', 'edu'].includes(secondLevel) ? 3 : 2;
+  return parts.slice(-keep).join('.');
+}
+
+export function uncategorisedOf(segments: readonly Segment[]): Uncategorised[] {
+  const found = new Map<string, Uncategorised>();
+  for (const s of segments) {
+    if (s.category !== 'other') continue;
+    const item: Omit<Uncategorised, 'ms'> | null = s.domain
+      ? { name: baseDomain(s.domain), kind: 'domain' }
+      : s.app && !TOO_BROAD.has(s.app.toLowerCase())
+        ? { name: s.app, kind: 'process' }
+        : null;
+    if (!item) continue;
+    const key = `${item.kind}:${item.name}`;
+    const entry = found.get(key) ?? { ...item, ms: 0 };
+    entry.ms += s.end - s.start;
+    found.set(key, entry);
+  }
+  return [...found.values()].sort((a, b) => b.ms - a.ms);
+}
+
 export interface UiDeps {
   journal: Journal;
   dbPath: string;
@@ -123,13 +175,23 @@ export interface DayView {
   report: Report;
   activeMs: number;
   focusMs: number;
+  /** On the PC plus what you logged (the phone), each moment once. */
   distractionMs: number;
+  /** Only what the PC saw. */
+  pcDistractionMs: number;
+  /** Logged off the PC: phone time and other distraction you logged. */
+  logged: LoggedDistraction;
+  /** Sites and apps no category rule matched, most time first. */
+  uncategorised: Uncategorised[];
   gaps: Gap[];
   gapMs: number;
   /** Job hours that day, from Settings; null when off or not a job day. */
   job: { start: number; end: number } | null;
   tasks: ReturnType<Journal['tasks']>;
   goals: Goal[];
+  /** The day's planned blocks, and how the day measured up to them so far. */
+  plan: PlanBlock[];
+  planComparison: PlanComparison;
   /** Morning and evening, whichever you've done. */
   checkins: Checkin[];
   sleep: Sleep;
@@ -173,7 +235,9 @@ export async function buildDay(
   const segments = toSegments(events, categories, games);
   const gaps = until > from ? findGaps(segments, entries, from, until, settings.gaps.minMinutes * 60_000) : [];
   const sumOf = (list: string[]) => report.totals.filter((t) => list.includes(t.category)).reduce((s, t) => s + t.ms, 0);
+  const logged = loggedDistraction(entries, segments, categories.distraction, from, to);
 
+  const plan = deps.journal.planBlocks(date);
   const nightActive = toSegments(nightEvents, categories, games).filter((s) => s.category !== 'idle');
   const sleep = sleepFor(from, deps.journal.entriesBetween(night.start, to), nightActive, now);
 
@@ -197,12 +261,17 @@ export async function buildDay(
     report,
     activeMs: report.trackedMs - report.idleMs,
     focusMs: sumOf(categories.focus),
-    distractionMs: sumOf(categories.distraction),
+    distractionMs: sumOf(categories.distraction) + logged.ms,
+    pcDistractionMs: sumOf(categories.distraction),
+    logged,
+    uncategorised: uncategorisedOf(segments),
     gaps,
     gapMs: gaps.reduce((s, g) => s + g.ms, 0),
     job: jobWindow(settings, from),
     tasks: deps.journal.tasks(date),
     goals: deps.journal.goals(date),
+    plan,
+    planComparison: comparePlan(plan, segments, entries, now, categories.focus),
     checkins: deps.journal.checkins(date),
     sleep,
     focusByHour,
@@ -210,6 +279,21 @@ export async function buildDay(
     distraction: categories.distraction,
     entryCategories: [...LIFE_CATEGORIES, ...CATEGORIES.filter((c) => c !== 'idle')],
   };
+}
+
+/** Active PC time per project on a day, from each project's match words. */
+export function pcTimeOn(deps: Pick<UiDeps, 'journal' | 'dbPath'>, date: string): Map<number, number> {
+  const from = parseLocalDate(date);
+  if (from === null) return new Map();
+  const to = new Date(from).setDate(new Date(from).getDate() + 1);
+  const projects = deps.journal.projects();
+  if (!projects.some((p) => p.match.length)) return new Map();
+  const reader = new EventReader(deps.dbPath);
+  try {
+    return pcTimeByProject(reader.eventsBetween(from, to), projects, from, to);
+  } finally {
+    reader.close();
+  }
 }
 
 // ------------------------------------------------------------------ the week
@@ -226,6 +310,7 @@ export function figuresOf(view: DayView): DayFigures {
     activeMs: view.activeMs,
     focusMs: view.focusMs,
     distractionMs: view.distractionMs,
+    phoneMs: view.logged.phoneMs,
     sleep: view.sleep,
     mood: averageOf(view.checkins.map((c) => c.mood)),
     energy: averageOf(view.checkins.map((c) => c.energy)),
@@ -263,6 +348,10 @@ export interface WeekView {
   distraction: string[];
   /** What each project did that week: running ones, and finished ones that moved. */
   projects: ProjectWeek[];
+  /** Sites and apps no rule matched this week, to sort into a category. */
+  uncategorised: Uncategorised[];
+  /** Categories you can pick for them. */
+  screenCategories: string[];
 }
 
 /** Projects over one week, as they stood at its end (or today, for this week). */
@@ -303,6 +392,8 @@ export async function buildWeek(deps: Pick<UiDeps, 'journal' | 'dbPath' | 'confi
     for (const b of view.report.timeline) {
       if (view.distraction.includes(b.category)) distractions.set(b.detail, (distractions.get(b.detail) ?? 0) + (b.end - b.start));
     }
+    // What you logged off the PC, such as "Phone: Instagram/TikTok", ranks alongside.
+    for (const l of view.logged.byLabel) distractions.set(l.name, (distractions.get(l.name) ?? 0) + l.ms);
   }
   const ranked = (map: Map<string, number>) => [...map].sort((a, b) => b[1] - a[1]);
   return {
@@ -318,7 +409,28 @@ export async function buildWeek(deps: Pick<UiDeps, 'journal' | 'dbPath' | 'confi
     review: deps.journal.review(monday),
     focus: current.views[0]?.focus ?? [],
     distraction: current.views[0]?.distraction ?? [],
-    projects: weekProjects(deps.journal, monday, now),
+    projects: (() => {
+      const list = weekProjects(deps.journal, monday, now);
+      if (!deps.journal.projects().some((p) => p.match.length)) return list;
+      const total = new Map<number, number>();
+      for (const v of current.views) {
+        if (v.from > now) break;
+        for (const [id, ms] of pcTimeOn(deps, v.date)) total.set(id, (total.get(id) ?? 0) + ms);
+      }
+      return list.map((p) => ({ ...p, pcMs: total.get(p.id) ?? 0 }));
+    })(),
+    uncategorised: (() => {
+      const all = new Map<string, Uncategorised>();
+      for (const item of current.views.flatMap((v) => v.uncategorised)) {
+        const key = `${item.kind}:${item.name}`;
+        const entry = all.get(key) ?? { ...item, ms: 0 };
+        entry.ms += item.ms;
+        all.set(key, entry);
+      }
+      // A minute or two of something is noise; what's worth sorting is what adds up.
+      return [...all.values()].filter((u) => u.ms >= 2 * 60_000).sort((a, b) => b.ms - a.ms).slice(0, 12);
+    })(),
+    screenCategories: CATEGORIES.filter((c) => c !== 'idle' && c !== 'other'),
   };
 }
 
@@ -382,6 +494,30 @@ function entryBody(body: unknown) {
   if (entry.end <= entry.start) throw new HttpError(400, 'The end must be after the start');
   if (entry.end - entry.start > 36 * 3600_000) throw new HttpError(400, 'An entry can be at most 36 hours');
   return entry;
+}
+
+/** A planned block from the window: its times must fall on its day, or run on past midnight. */
+export function planBody(body: unknown, existing?: PlanBlock) {
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const blockDay = existing?.day ?? day(raw['day']);
+  const block = {
+    day: blockDay,
+    start: raw['start'] === undefined && existing ? existing.start : time(raw['start'], 'start'),
+    end: raw['end'] === undefined && existing ? existing.end : time(raw['end'], 'end'),
+    label: raw['label'] === undefined && existing ? existing.label : text(raw['label'], 'What you plan to do', 200),
+    category: raw['category'] === undefined && existing ? existing.category : optionalText(raw['category'], 'category'),
+  };
+  if (block.end <= block.start) throw new HttpError(400, 'The end must be after the start');
+  if (block.end - block.start > 24 * 3600_000) throw new HttpError(400, 'A block can be at most 24 hours');
+  if (dayKey(block.start) !== block.day) throw new HttpError(400, `A block for ${block.day} has to start on that day`);
+  return block;
+}
+
+/** The same clock time on a day `days` later, so a copied plan stays put across DST. */
+export function shiftByDays(ms: number, days: number): number {
+  const d = new Date(ms);
+  d.setDate(d.getDate() + days);
+  return d.getTime();
 }
 
 function schedule(value: unknown) {
@@ -500,6 +636,31 @@ export function createUi(deps: UiDeps) {
       if (method === 'DELETE') return send(response, journal.deleteTask(id(m)) ? 204 : 404);
     }
 
+    if (method === 'GET' && route === '/plan') {
+      const date = day(url.searchParams.get('date') ?? dayKey(now()));
+      return send(response, 200, { day: date, blocks: journal.planBlocks(date) });
+    }
+    if (method === 'POST' && route === '/plan') return send(response, 201, journal.addPlanBlock(planBody(await readJson(request)), now()));
+    if (method === 'POST' && route === '/plan/copy') {
+      const body = (await readJson(request)) as Record<string, unknown>;
+      const from = day(body['from']);
+      const to = day(body['to']);
+      const days = Math.round(((parseLocalDate(to) as number) - (parseLocalDate(from) as number)) / 86_400_000);
+      if (days === 0) throw new HttpError(400, 'Copy a plan to a different day');
+      return send(response, 200, journal.copyPlan(from, to, (ms) => shiftByDays(ms, days), now()));
+    }
+    if ((m = /^\/plan\/(\d+)$/.exec(route))) {
+      if (method === 'PUT') {
+        const existing = journal.planBlock(id(m));
+        if (!existing) throw new HttpError(404, 'no such block');
+        const block = planBody(await readJson(request), existing);
+        const updated = journal.updatePlanBlock(id(m), block);
+        if (!updated) throw new HttpError(404, 'no such block');
+        return send(response, 200, updated);
+      }
+      if (method === 'DELETE') return send(response, journal.deletePlanBlock(id(m)) ? 204 : 404);
+    }
+
     if (method === 'GET' && route === '/week') {
       return send(response, 200, await buildWeek(deps, url.searchParams.get('date') ?? dayKey(now()), now()));
     }
@@ -588,6 +749,24 @@ export function createUi(deps: UiDeps) {
         return send(response, 200, merged);
       }
     }
+    if (method === 'POST' && route === '/categories') {
+      const body = (await readJson(request)) as Record<string, unknown>;
+      const category = body['category'];
+      const kind = body['kind'];
+      if (typeof category !== 'string' || !CATEGORIES.includes(category as Category) || category === 'idle') throw new HttpError(400, 'category must be one of the screen categories');
+      if (kind !== 'domain' && kind !== 'process') throw new HttpError(400, 'kind must be domain or process');
+      const value = text(body['value'], 'Site or app', 200);
+      const file = categoriesFile();
+      let updated: string;
+      try {
+        updated = addToCategories(await readFile(file, 'utf8'), { category: category as Category, kind, value });
+      } catch (error) {
+        throw new HttpError(400, (error as Error).message);
+      }
+      await writeFile(file, updated, 'utf8');
+      deps.logger.info(`Categories: added a ${kind} to ${category}`);
+      return send(response, 200, { ok: true });
+    }
     if (method === 'POST' && route === '/evening/test') {
       await deps.testEvening();
       return send(response, 204);
@@ -597,7 +776,7 @@ export function createUi(deps: UiDeps) {
       return send(response, 200, { sent: await deps.testProjectReminder() });
     }
 
-    if (await projectRoutes(journal, method, route, url, request, response, dayKey(now()))) return;
+    if (await projectRoutes(journal, method, route, url, request, response, dayKey(now()), (date) => pcTimeOn(deps, date))) return;
 
     throw new HttpError(404, 'not found');
   };

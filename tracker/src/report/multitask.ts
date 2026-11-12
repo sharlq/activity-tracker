@@ -133,6 +133,66 @@ export function phoneMultitasking(segments: readonly Segment[], entries: readonl
   };
 }
 
+/** Time you logged yourself that counts against your day: the phone above all. */
+export interface LoggedDistraction {
+  /** Logged time in a distraction category, minus moments the PC already counts as distraction. */
+  ms: number;
+  /** All logged phone time (any category), overlaps counted once. */
+  phoneMs: number;
+  /** Of the phone time, how much was in a distraction category. */
+  phoneDistractionMs: number;
+  /** What it was, by label ("Phone: Instagram/TikTok"), most time first. */
+  byLabel: Ranked[];
+}
+
+type Span = { start: number; end: number };
+const merged = (spans: readonly Span[]): Span[] => {
+  const sorted = spans.filter((s) => s.end > s.start).toSorted((a, b) => a.start - b.start);
+  const out: Span[] = [];
+  for (const s of sorted) {
+    const last = out.at(-1);
+    if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
+    else out.push({ ...s });
+  }
+  return out;
+};
+const total = (spans: readonly Span[]) => spans.reduce((s, x) => s + x.end - x.start, 0);
+const overlapOf = (a: readonly Span[], b: readonly Span[]) => {
+  let ms = 0;
+  for (const x of a) for (const y of b) ms += Math.max(0, Math.min(x.end, y.end) - Math.max(x.start, y.start));
+  return ms;
+};
+
+/**
+ * The PC can't see the phone, so distraction time you log ("Phone: Instagram",
+ * social media) is added to what it saw, inside [from, to). A moment counts once:
+ * scrolling the phone while YouTube plays on the PC isn't two distractions.
+ */
+export function loggedDistraction(
+  entries: readonly Entry[],
+  segments: readonly Segment[],
+  distraction: readonly string[],
+  from: number,
+  to: number,
+): LoggedDistraction {
+  const clip = (e: Span) => ({ start: Math.max(e.start, from), end: Math.min(e.end, to) });
+  const distracting = entries.filter((e) => e.category !== null && distraction.includes(e.category));
+  const logged = merged(distracting.map(clip));
+  const pc = merged(segments.filter((s) => distraction.includes(s.category)));
+  const phone = entries.filter(isPhoneEntry);
+  const byLabel = new Map<string, number>();
+  for (const e of distracting) {
+    const c = clip(e);
+    if (c.end > c.start) byLabel.set(e.label, (byLabel.get(e.label) ?? 0) + c.end - c.start);
+  }
+  return {
+    ms: total(logged) - overlapOf(logged, pc),
+    phoneMs: total(merged(phone.map(clip))),
+    phoneDistractionMs: total(merged(phone.filter((e) => distracting.includes(e)).map(clip))),
+    byLabel: rank(byLabel),
+  };
+}
+
 const appName = (processName: string) => processName.replace(/\.exe$/i, '');
 
 export function audioBlocks(events: readonly AudioEvent[], minMs = MIN_LISTENING_MS): AudioBlock[] {

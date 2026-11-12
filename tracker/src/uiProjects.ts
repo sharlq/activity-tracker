@@ -48,7 +48,17 @@ function projectChange(body: Body): ProjectChange {
   if (body['status'] !== undefined) change.status = status(body['status']);
   const due = clearable(body['due'], day);
   if (due !== undefined) change.due = due;
+  if (body['match'] !== undefined) change.match = matchWords(body['match']);
   return change;
+}
+
+/** A list of words, or one comma-separated string of them. */
+export function matchWords(value: unknown): string[] {
+  const list = typeof value === 'string' ? value.split(',') : value;
+  if (!Array.isArray(list) || list.some((w) => typeof w !== 'string')) throw new HttpError(400, 'match must be a list of words');
+  const words = [...new Set((list as string[]).map((w) => w.trim()).filter(Boolean))];
+  if (words.length > 20 || words.some((w) => w.length > 100)) throw new HttpError(400, 'match takes up to 20 words of up to 100 characters');
+  return words;
 }
 
 function subtaskChange(body: Body): SubtaskChange {
@@ -72,20 +82,24 @@ export async function projectRoutes(
   request: IncomingMessage,
   response: ServerResponse,
   today: string,
+  /** Active PC time per project id on a day, from each project's match words. */
+  pcTime: (day: string) => Map<number, number> = () => new Map(),
 ): Promise<boolean> {
   let m: RegExpExecArray | null;
   const on = url.searchParams.get('date') ?? today;
   if (parseLocalDate(on) === null) throw new HttpError(400, 'date must look like 2026-11-05');
   const neglect = journal.neglectAfterDays();
+  let time: Map<number, number> | null = null;
+  const withTime = <T extends { id: number }>(view: T) => ({ ...view, pcMs: (time ??= pcTime(on)).get(view.id) ?? 0 });
   const overview = (id: number) => {
     const view = journal.projectOverview(id, on, neglect);
     if (!view) throw new HttpError(404, 'no such project');
-    return view;
+    return withTime(view);
   };
 
   if (route === '/projects') {
     if (method === 'GET') {
-      send(response, 200, { today: on, neglectAfterDays: neglect, projects: journal.projectOverviews(on, neglect) });
+      send(response, 200, { today: on, neglectAfterDays: neglect, projects: journal.projectOverviews(on, neglect).map(withTime) });
       return true;
     }
     if (method === 'POST') {

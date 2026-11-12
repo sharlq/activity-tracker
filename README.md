@@ -7,12 +7,14 @@ Claude Code sessions, plus music, podcasts, and videos playing in the background
 do something else. Turns them into daily and weekly reports, and into a daily rhythm:
 
 - **Morning:** the first time you're at the PC each morning, رقيب opens a page with
-  last night's sleep, yesterday's summary, and asks how you feel, your goals for the day,
-  and today's tasks.
+  last night's sleep, yesterday's summary, and asks how you feel, to plan the day (or
+  adjust last night's plan), your goals for the day, and today's tasks.
 - **Welcome back:** when you come back to the PC after a gap, a small window asks what you
   were doing while it's fresh.
 - **Evening:** at 22:00 a notification sums up your day and asks you to log the gaps
-  (time away from the PC, or idle at it), how you felt, and how your goals went.
+  (time away from the PC, or idle at it), how you felt, how your goals went, and to plan
+  tomorrow. If you
+  only get to the PC after 23:00, it waits: the next morning page asks about yesterday.
 - **Weekly review:** the week side by side: sleep, mood, energy, focus, goals, and what
   stood out, compared with the week before. On Sundays the evening notification offers it.
 - **Reminders:** notifications every hour, or at set times, for medicine, water, or
@@ -123,11 +125,25 @@ npm run raqib -- recent 30
 ```
 
 Permanently delete events, background sound, and logged entries that ended before a date,
-and tasks, check-ins, goals, and weekly reviews for days before it:
+and tasks, check-ins, goals, day plans, and weekly reviews for days before it:
 
 ```bash
 npm run raqib -- purge --before 2026-01-01
 ```
+
+### Backups
+
+While رقيب runs, it copies the database once a day to `backups\data-YYYY-MM-DD.db` in the
+data folder and keeps the newest 14. Copy one now, or see the newest in `status`:
+
+```bash
+npm run raqib -- backup
+```
+
+To restore one, stop رقيب, copy it over `data.db` in the data folder, and start it again.
+The backups sit on the same disk by default, so they protect against a bad purge or a
+corrupt file, not a dead disk: set `backup.folder` (see Configuration) to a USB drive or a
+synced folder for that. A synced folder copies your data off this PC, so choose it knowingly.
 
 List Claude Code sessions for a day (today if no date is given):
 
@@ -150,8 +166,8 @@ npm run raqib -- open
 Add `morning`, `evening`, `week`, `projects`, `reminders`, or `settings` to open that page. The window
 is a page served by رقيب itself on 127.0.0.1, shown in a Chrome (or Edge) app window.
 
-- **Today:** the day as three lanes: what was on screen, what was playing, and what you
-  logged. Below it: the gaps still to log, mood and energy, the day's goals, last night's
+- **Today:** the day as lanes: your plan, what was on screen, what was playing, and what
+  you logged. Plan blocks are green when kept, amber when partly kept, and red when missed. Below it: the gaps still to log, mood and energy, the day's goals, last night's
   sleep, your tasks, multitasking, and where the PC time went. Use the arrows to look at
   earlier days.
 - **Morning:** last night's sleep (confirm the estimate or correct it), yesterday at a
@@ -183,7 +199,7 @@ is a page served by رقيب itself on 127.0.0.1, shown in a Chrome (or Edge) ap
   asleep through several reminder times, you get one reminder when it wakes, saying when it
   was due, not a burst. Nothing pops up while the screen is locked; it waits for you.
 - **Settings:** when the morning page opens (default: first use between 08:00 and 12:00),
-  when the evening log comes (22:00), the project reminder and when a project counts as untouched, the shortest gap worth asking about (15 minutes), how
+  when the evening log comes (22:00) and the cut-off after which it waits for the morning (23:00), the project reminder and when a project counts as untouched, the shortest gap worth asking about (15 minutes), how
   to ask when you come back (a small window, a notification, or not at all), and whether to
   record background sound.
 
@@ -216,6 +232,33 @@ Each day shows the night you woke from that morning:
   if you haven't used it yet this morning, or if the stretch is longer than 11 hours (it
   probably includes a morning out).
 
+### The day's plan
+
+A plan is the day in blocks of time: "07:00–08:00 Gym", "09:00–11:00 Study AWS", each with a
+category if you like. The evening log asks you to plan tomorrow (start from today's plan
+with one click, or the quick picks), and the morning page shows the plan to adjust, or asks
+for one if there isn't one yet.
+
+Each block is then held up against what happened in its time: what you logged counts
+first, then what was on screen. A block is **kept** when at least 60% of it went to what
+was planned, **partly** from 20%, and **missed** below that. The category decides what
+counts: a "study" block is kept by logged study or by learning at the PC, and "any focus"
+by any focused category. Without a category, a logged entry or site whose name matches the
+block's label counts. Idle time with nothing logged doesn't count either way; it shows as
+"not logged". Today shows the plan as its own lane and a card with each block and what
+filled it; the evening log and its notification say how much of the planned time went as
+planned; the morning page shows yesterday's.
+
+```bash
+npm run raqib -- plan add 09:00-11:00 "Study AWS" --category study --date tomorrow
+```
+
+```bash
+npm run raqib -- plan
+```
+
+Also `plan rm <id>` and `plan copy yesterday` (same clock times, to today or `--to D`).
+
 ### Mood, energy, and goals
 
 Twice a day, morning and evening, you rate your mood and energy from 1 (low) to 5 (great),
@@ -224,7 +267,19 @@ the morning and marked met, partly, or missed in the evening. Tasks stay the day
 to-dos. All of it is kept in the same database, and `purge` deletes it with the rest.
 
 If the PC is off at the evening time, the evening log comes the first time you use it later
-that evening, and yesterday's unlogged gaps also show on the next morning page.
+that evening, up to the cut-off (23:00). After that it doesn't come at all: the next
+morning page has a "Last night's log is still open" section with yesterday's check-in, any
+goals not yet marked, and projects not yet answered. Yesterday's unlogged gaps show there too.
+
+### The phone
+
+The PC can't see your phone, so phone time comes from what you log: any entry whose label
+says phone ("Phone: Instagram/TikTok", "On my phone", "على الجوال"). Logged time in a
+distraction category (social media, video...) is added to the day's **distractions**, each
+moment once (scrolling while YouTube plays on the PC isn't counted twice). The day, the
+week table, and the weekly observations show phone time on its own too. The week averages
+it only over days you logged the phone, so a day without an answer isn't read as a day
+without the phone.
 
 **Privacy:** the window signs in with the API token (the link رقيب opens contains it) and
 then uses a cookie only this window's browser profile holds. Its data needs that cookie and a
@@ -324,6 +379,12 @@ npm run raqib -- projects
     last worked on today
 ```
 
+- **Counts automatically:** give a project match words, and PC time where a window title
+  contains one, or the site, app, or editor workspace is one, counts toward it:
+  `project match 1 "AWS Certified, aws.amazon.com"` (or the project's **Counts
+  automatically** box in the window; `none` clears them). The time shows on its card, in
+  the evening log ("47m on it at the PC today. How far did you get?"), in `projects`, and
+  in the week. Idle time never counts. Time is not progress: you still say how far you got.
 - **What you did each day:** `progress <sub id> +15` adds to a measured sub-task (`-3`
   corrects a mistake, `=12` sets the day's amount), `sub done <id>` ticks a checkbox,
   `project note <id> "..."` says what you did, and `project skip <id>` records "nothing
@@ -421,6 +482,10 @@ from starting, so a typo can't silently switch off your exclusions.
 | `gaming.games` | Extra games: process names (`celeste` or `celeste.exe`) or full exe paths |
 | `browser.fullUrlDomains` | Sites whose full address is stored. Everywhere else, only the domain is kept |
 | `api.port` | Port for the local API on 127.0.0.1 (default 5610) |
+| `backup.folder` | Where the daily database copies go (default: `backups` in the data folder) |
+| `backup.keep` | How many daily copies to keep (default 14) |
+| `reading.apps` | Apps you read in without touching anything (default: Foxit, Acrobat, SumatraPDF, PDF-XChange) |
+| `reading.idleThresholdMs` | How long without input in those apps before you count as idle (default 600000, 10 minutes) |
 
 Excluded time leaves no trace: no row, no "excluded" marker, and no log line. It appears
 only as an absence of events. Exclusions apply to new data only; use `purge` for old data.
@@ -437,9 +502,22 @@ Each row in the `events` table has `kind` (`window` or `idle`), `start_ms`, `end
   front (app, site, project), so reports can tell reading apart from being away: see
   "Idle time, by what was on screen". It still counts as idle, never as using the app.
   Moving the mouse, scrolling, or pressing a key ends idle.
+- **Reading:** in a PDF reader (`reading.apps`) you count as idle only after 10 minutes
+  without input, since reading slides doesn't touch the keyboard.
+- **Calls:** while an app holds the microphone (Teams, Zoom, WhatsApp, Discord...) you're
+  never idle, however long you go without typing, and the time is recorded with the call
+  app, so it counts as `meeting` (see Categories). It reads the same "in use" flag Windows'
+  privacy settings show; nothing is listened to or recorded. Noise filters (ASUS DenoiseAI,
+  Krisp, NVIDIA Broadcast) don't count, and dictating to Claude or ChatGPT keeps you active
+  without counting as a call.
 - **Lock screen:** nothing is recorded while locked.
 - **Sleep, shutdown, crash:** every sample is written straight away, so at most one
   interval is lost. A silence longer than 3 intervals is never bridged by an event.
+- **Stalls:** if رقيب itself is held up (the PC busy launching a game, say) while the PC
+  stays awake, it tells that apart from sleep using Windows' awake clock, and records
+  across a stall of up to 5 minutes instead of leaving a hole. Each stall is logged with
+  the slowest recent work, and anything on its main loop taking over 2 seconds is logged
+  as "Slow: ...", so a repeat names its cause.
 
 ## Gaming
 
@@ -578,11 +656,22 @@ a condition given as a list matches if any item does. An optional `note` is igno
 | `domain` | A site and its subdomains (`"google.com"` covers `mail.google.com`); `"*"` is any site |
 | `project` | An editor workspace name, any case; `"*"` is any project |
 | `gaming` | `"game"` or `"launcher"`, using the gaming rules in `config.json` |
+| `call` | The app holding the microphone (`"MSTeams"`, `"Zoom"`); `"*"` is any call |
 
-Categories: `work`, `learning`, `debate`, `social media`, `video`, `news`, `gaming`,
-`game launcher`, `messaging`, `other`, `idle`. Anything no rule matches is `other`, and
-idle time is always `idle`. A typo in a category or condition name stops the report with a
-message, rather than being silently ignored.
+Categories: `work`, `learning`, `debate`, `social media`, `video`, `news`,
+`entertainment`, `gaming`, `game launcher`, `messaging`, `meeting`, `other`, `idle`.
+Anything no rule matches is `other`, and idle time is always `idle`. A typo in a category
+or condition name stops the report with a message, rather than being silently ignored.
+`meeting` is neutral by default; add it to `focus` if your calls are work you want
+counted as focus. `entertainment` is neutral too: it's for downtime you chose (a film, a
+series you planned to watch), as opposed to `video` and the other distraction categories.
+Add it to `distraction` if you'd rather it counted as one.
+
+**Sorting what's left over:** the Week page has a **Not in any category** card listing the
+sites and apps that added up to 2 minutes or more in `other` that week. Pick a category
+and it's added to `categories.json` (into one rule per category marked "Added in رقيب",
+near the top), which re-sorts every past day too. The rest of the file is left as you
+wrote it.
 
 `focus` and `distraction` at the top of the file list which categories count as each:
 

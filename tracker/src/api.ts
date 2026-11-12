@@ -153,6 +153,12 @@ export function createApi(token: string, handlers: ApiHandlers, logger: Logger):
 
   const server = createServer((request, response) => {
     const { port } = server.address() as AddressInfo;
+    const started = performance.now();
+    response.on('finish', () => {
+      // Requests share the tracker's one thread, so a slow one delays the next tick.
+      const ms = Math.round(performance.now() - started);
+      if (ms >= 2_000) logger.warn(`Slow: ${request.method} ${request.url?.split('?')[0]} took ${ms}ms`);
+    });
     route(request, response, port).catch((error: unknown) => {
       const status = error instanceof HttpError ? error.status : 500;
       if (status === 500) logger.error('API request failed', error);

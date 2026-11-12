@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,15 @@ describe('Journal', () => {
   afterEach(() => {
     journal.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('saves the same entry sent twice only once', () => {
+    const first = journal.addEntry({ start: 0, end: 60_000, label: 'Rest', category: 'rest' });
+    const again = journal.addEntry({ start: 0, end: 60_000, label: 'Rest', category: 'rest' });
+    const other = journal.addEntry({ start: 0, end: 60_000, label: 'Prayer', category: 'prayer' });
+    assert.equal(again.id, first.id);
+    assert.notEqual(other.id, first.id);
+    assert.equal(journal.entriesBetween(0, 60_000).length, 2);
   });
 
   it('keeps tasks per day and carries unfinished ones over once', () => {
@@ -57,6 +66,32 @@ describe('Journal', () => {
     assert.deepEqual(journal.entriesBetween(-1, 100), []);
     assert.deepEqual(journal.audioBetween(-1, 100), []);
     assert.deepEqual(journal.tasks('2020-01-01'), []);
+  });
+
+  it('keeps a day plan, saves a repeat once, and copies it to another day', () => {
+    const at = (d: number, h: number) => new Date(2026, 10, d, h).getTime();
+    const a = journal.addPlanBlock({ day: '2026-11-12', start: at(12, 9), end: at(12, 11), label: 'Study', category: 'study' });
+    assert.equal(journal.addPlanBlock({ day: '2026-11-12', start: at(12, 9), end: at(12, 11), label: 'Study', category: 'study' }).id, a.id);
+    journal.addPlanBlock({ day: '2026-11-12', start: at(12, 7), end: at(12, 8), label: 'Gym', category: 'exercise' });
+    assert.deepEqual(journal.planBlocks('2026-11-12').map((b) => b.label), ['Gym', 'Study']);
+
+    assert.equal(journal.updatePlanBlock(a.id, { end: at(12, 8) }), null, 'an end before the start is refused');
+    assert.equal(journal.updatePlanBlock(a.id, { label: 'Study AWS', category: null })?.label, 'Study AWS');
+
+    const day = 86_400_000;
+    const copied = journal.copyPlan('2026-11-12', '2026-11-13', (ms) => ms + day);
+    assert.equal(copied.length, 2);
+    assert.equal(journal.copyPlan('2026-11-12', '2026-11-13', (ms) => ms + day).length, 0, 'copying again adds nothing');
+    assert.deepEqual(journal.planBlocks('2026-11-13').map((b) => [b.label, b.start]), [['Gym', at(13, 7)], ['Study AWS', at(13, 9)]]);
+
+    assert.equal(journal.deletePlanBlock(a.id), true);
+    assert.equal(journal.planBlocks('2026-11-12').length, 1);
+
+    const store = new Store(join(dir, 'data.db'));
+    store.purgeBefore(new Date(2026, 10, 13).getTime());
+    store.close();
+    assert.deepEqual(journal.planBlocks('2026-11-12'), []);
+    assert.equal(journal.planBlocks('2026-11-13').length, 2);
   });
 });
 
@@ -105,6 +140,23 @@ describe('UI API', () => {
     });
   }
   const signedIn = { cookie: `raqib=${cookieValue(TOKEN)}`, 'x-raqib': '1', 'content-type': 'application/json' };
+
+  it('puts an uncategorised site into a category, and refuses a bad one', async () => {
+    const file = join(dir, 'categories.json');
+    writeFileSync(file, '{\n  "focus": ["work"],\n  "distraction": [],\n  "rules": [\n    { "category": "video", "domain": "youtube.com" }\n  ]\n}\n');
+    const before = process.env['ACTIVITY_TRACKER_CATEGORIES'];
+    process.env['ACTIVITY_TRACKER_CATEGORIES'] = file;
+    try {
+      const ok = await call('/v1/ui/categories', { method: 'POST', headers: signedIn, body: { category: 'work', kind: 'domain', value: 'hubspot.com' } });
+      assert.equal(ok.status, 200);
+      assert.match(readFileSync(file, 'utf8'), /"category": "work", "domain": \["hubspot.com"\], "note": "Added in رقيب"/);
+      const bad = await call('/v1/ui/categories', { method: 'POST', headers: signedIn, body: { category: 'idle', kind: 'domain', value: 'x.com' } });
+      assert.equal(bad.status, 400);
+    } finally {
+      if (before === undefined) delete process.env['ACTIVITY_TRACKER_CATEGORIES'];
+      else process.env['ACTIVITY_TRACKER_CATEGORIES'] = before;
+    }
+  });
 
   it('swaps the key for a cookie, and refuses a wrong key', async () => {
     const ok = await call(`/ui/login?key=${TOKEN}&go=morning`);
@@ -179,6 +231,36 @@ describe('UI API', () => {
     assert.equal(week.days[1]?.mood, 2);
     assert.equal(week.days[1]?.sleep.totalMs, 8 * 3600_000);
     assert.ok(week.previous);
+  });
+
+  it('plans a day, checks the blocks, copies a plan, and shows it with the day', async () => {
+    const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).getTime();
+    const post = (body: unknown) => call('/v1/ui/plan', { method: 'POST', headers: signedIn, body });
+    const made = await post({ day: '2026-11-12', start: at(12, 9), end: at(12, 11), label: 'Study', category: 'study' });
+    assert.equal(made.status, 201);
+    const { id } = JSON.parse(made.body) as { id: number };
+    // Runs past midnight: fine. Starts on another day, ends before it starts, or no label: refused.
+    assert.equal((await post({ day: '2026-11-12', start: at(12, 23), end: at(13, 0, 30), label: 'Read' })).status, 201);
+    assert.equal((await post({ day: '2026-11-12', start: at(13, 9), end: at(13, 10), label: 'x' })).status, 400);
+    assert.equal((await post({ day: '2026-11-12', start: at(12, 10), end: at(12, 9), label: 'x' })).status, 400);
+    assert.equal((await post({ day: '2026-11-12', start: at(12, 10), end: at(12, 11), label: ' ' })).status, 400);
+
+    const moved = await call(`/v1/ui/plan/${id}`, { method: 'PUT', headers: signedIn, body: { start: at(12, 8), end: at(12, 10), label: 'Study AWS', category: 'study' } });
+    assert.equal(moved.status, 200);
+    assert.equal(journal.planBlock(id)?.start, at(12, 8));
+    assert.equal((await call('/v1/ui/plan/999', { method: 'PUT', headers: signedIn, body: { label: 'x' } })).status, 404);
+
+    const copy = await call('/v1/ui/plan/copy', { method: 'POST', headers: signedIn, body: { from: '2026-11-12', to: '2026-11-13' } });
+    assert.equal(copy.status, 200);
+    const next = JSON.parse((await call('/v1/ui/plan?date=2026-11-13', { headers: signedIn })).body) as { blocks: { start: number; end: number; label: string }[] };
+    assert.deepEqual(next.blocks.map((b) => [b.label, b.start, b.end]), [['Study AWS', at(13, 8), at(13, 10)], ['Read', at(13, 23), at(14, 0, 30)]]);
+
+    const day = JSON.parse((await call('/v1/ui/day?date=2026-11-12', { headers: signedIn })).body) as { plan: unknown[]; planComparison: { blocks: { status: string }[] } };
+    assert.equal(day.plan.length, 2);
+    assert.equal(day.planComparison.blocks[0]?.status, 'missed', 'nothing was recorded, so the past block was missed');
+
+    assert.equal((await call(`/v1/ui/plan/${id}`, { method: 'DELETE', headers: signedIn })).status, 204);
+    assert.equal(journal.planBlocks('2026-11-12').length, 1);
   });
 
   it('builds a day, with the whole day as one gap when nothing was recorded', async () => {

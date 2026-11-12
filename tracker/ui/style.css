@@ -42,6 +42,8 @@
   --cat-gaming: #9c3aa8;
   --cat-launcher: #a86fb0;
   --cat-messaging: #5b7a99;
+  --cat-meeting: #3f7f5f;
+  --cat-entertainment: #a8862a;
   --cat-other: #7e8783;
   --cat-idle: #d6d1c4;
   --cat-logged: #ebe0c9;
@@ -100,6 +102,8 @@
     --cat-gaming: #df8cf0;
     --cat-launcher: #9a63a6;
     --cat-messaging: #8ea8c3;
+    --cat-meeting: #7cc49b;
+    --cat-entertainment: #e3c46a;
     --cat-other: #7d8884;
     --cat-idle: #38423f;
     --cat-logged: #3a3324;
@@ -352,6 +356,46 @@ input[type='checkbox']:not(.switch input):checked::after { opacity: 1; transform
 .gap-form select { flex: 0 1 180px; }
 .gap-form input[type='time'] { width: 124px; }
 .gap-form .to { color: var(--ink-muted); }
+
+/* ---------- The day's plan ---------- */
+.plan-strip { margin: 2px 0 12px; }
+.plan-strip-track { position: relative; height: 22px; background: var(--track); border-radius: var(--radius-sm); overflow: hidden; }
+.plan-chunk { position: absolute; top: 3px; bottom: 3px; min-width: 2px; border-radius: var(--radius-bar); background: color-mix(in srgb, var(--c) 30%, var(--panel)); box-shadow: inset 0 0 0 1.5px var(--c); }
+.plan-chunk.kept { background: var(--c); }
+.plan-chunk.missed { background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--danger) 45%, transparent) 4px 5px); }
+.plan-chunk.partly { background: color-mix(in srgb, var(--c) 55%, var(--panel)); }
+.plan-strip-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--dawn); }
+.plan-strip-axis { position: relative; height: 16px; margin-top: 3px; font-size: 10.5px; color: var(--ink-muted); }
+.plan-strip-axis span { position: absolute; transform: translateX(-50%); }
+.plan-strip-axis span:first-child { transform: none; }
+.plan-strip-axis span:last-child { transform: translateX(-100%); }
+.plan-list .plan-row { flex-wrap: wrap; gap: 8px; }
+.plan-row input[type='time'] { width: 112px; }
+.plan-row input[type='text'] { flex: 1 1 160px; }
+.plan-row select { flex: 0 1 140px; }
+.plan-row .to, .plan-form .to { color: var(--ink-muted); }
+.plan-chips { margin-top: 12px; }
+.plan-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.plan-form input[type='text'] { flex: 1 1 180px; }
+.plan-form select { flex: 0 1 140px; }
+.plan-form input[type='time'] { width: 112px; }
+.pva { display: grid !important; gap: 6px; }
+.pva-top { display: flex; align-items: center; gap: 10px; }
+.pva-bar { display: flex; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.pva-bar b.other { background: var(--line-control); opacity: 0.35; }
+.pva-did { font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--ink-muted); }
+.pva-did .did.kept { color: var(--good); font-weight: 600; }
+.pva-did .did.unknown { font-style: italic; }
+.badge.good { background: var(--good-soft); color: var(--good); border-color: transparent; }
+.badge.dawn { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+.badge.danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.pva-edit > .card { border: 0; box-shadow: none; padding: 12px 0 0; background: transparent; }
+.lane.plan-lane { height: 26px; }
+.bar.plan { background: color-mix(in srgb, var(--c) 12%, var(--panel)); box-shadow: inset 0 0 0 1.5px var(--c); }
+.bar.plan.kept, .bar.plan.partly { background: color-mix(in srgb, var(--c) 32%, var(--panel)); }
+.bar.plan.missed { background: repeating-linear-gradient(135deg, var(--danger-soft) 0 4px, color-mix(in srgb, var(--danger) 35%, transparent) 4px 5px); }
+.bar.plan .bar-label { color: var(--ink); }
+.dot-plan { background: color-mix(in srgb, var(--accent) 28%, var(--panel)); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .gap-card.flash { box-shadow: 0 0 0 2px var(--accent); }
 
 /* ---------- Check-ins, goals, sleep ---------- */

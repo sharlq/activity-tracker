@@ -4,12 +4,13 @@
 // what you did on them each day, and their plan. `project create` and `project plan`
 // take a whole plan as one JSON file, so Claude can lay out a project in one step.
 import { readFileSync } from 'node:fs';
-import { id, openJournal, options, parseDay, UsageError } from './cliShared.ts';
+import { dbPath, id, openJournal, options, parseDay, UsageError } from './cliShared.ts';
 import type { Journal } from './journal.ts';
 import type { Checked } from './projectPlan.ts';
 import { checkNewProject, checkReplan } from './projectPlan.ts';
 import type { ProjectOverview, ProjectStatus, SubtaskOverview } from './projects.ts';
 import { daysBetween } from './projects.ts';
+import { pcTimeOn } from './ui.ts';
 
 export const PROJECTS_USAGE = `  raqib projects [--all] [--date D] [--json]
                                       Your projects with progress bars (--all includes finished ones)
@@ -19,6 +20,9 @@ export const PROJECTS_USAGE = `  raqib projects [--all] [--date D] [--json]
   raqib project rename <id> "name" | due <id> D|none | pause|resume|done|rm <id>
   raqib project note <id> "what you did" [--date D]
   raqib project skip <id> [--date D]  "Nothing today" on a project
+  raqib project match <id> "AWS Certified, aws.amazon.com" | none
+                                      PC time counts toward it when a window title, site,
+                                      app, or editor workspace matches one of these
   raqib project create --file plan.json [--dry-run]
                                       Create a project with its sub-tasks and daily targets
   raqib project plan <id> --file plan.json [--dry-run]
@@ -70,8 +74,14 @@ function projectHeader(p: ProjectOverview): string {
   return `#${p.id}  ${p.name}${status}  ${bar(p.fraction)}  ${percent(p.fraction)}${p.due ? `  due ${p.due}` : ''}`;
 }
 
-function projectLines(p: ProjectOverview, day: string): string[] {
+function minutes(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m` : `${m}m`;
+}
+
+function projectLines(p: ProjectOverview, day: string, pcMs?: number): string[] {
   const out = [projectHeader(p)];
+  if (p.match.length) out.push(`    On the PC ${day}: ${minutes(pcMs ?? 0)}  (counts: ${p.match.join(', ')})`);
   if (p.subtasks.length === 0) out.push('    No sub-tasks yet.');
   for (const s of p.subtasks) out.push(subtaskLine(s));
   out.push(todayLine(p, day));
@@ -171,7 +181,8 @@ function projects(args: string[]): number {
     }
     const order: ProjectStatus[] = ['active', 'paused', 'done'];
     const sorted = [...list].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
-    console.log(sorted.map((p) => projectLines(p, day).join('\n')).join('\n\n'));
+    const time = pcTimeOn({ journal, dbPath: dbPath() }, day);
+    console.log(sorted.map((p) => projectLines(p, day, time.get(p.id)).join('\n')).join('\n\n'));
     return 0;
   } finally {
     journal.close();
@@ -243,6 +254,19 @@ function project(args: string[]): number {
         const day = parseDay(values['date']);
         if (!journal.setProjectDay(id(target), day, { note })) throw new UsageError(`There is no project #${target}.`);
         show(journal, id(target), day);
+        return 0;
+      }
+      case 'match': {
+        const [target, ...words] = rest;
+        const text = words.join(' ').trim();
+        if (target === undefined || !text) throw new UsageError('Usage: raqib project match <id> "word, site.com, AppName" | none');
+        const match = text.toLowerCase() === 'none' ? [] : [...new Set(text.split(',').map((w) => w.trim()).filter(Boolean))];
+        if (match.length > 20 || match.some((w) => w.length > 100)) throw new UsageError('Up to 20 words of up to 100 characters');
+        if (!journal.updateProject(id(target), { match })) throw new UsageError(`There is no project #${target}.`);
+        const day = parseDay(undefined);
+        const view = journal.projectOverview(id(target), day, neglectAfter(journal));
+        if (view) console.log(projectLines(view, day, pcTimeOn({ journal, dbPath: dbPath() }, day).get(view.id)).join('\n'));
+        if (!match.length) console.log('    Only what you report counts now.');
         return 0;
       }
       case 'skip': {

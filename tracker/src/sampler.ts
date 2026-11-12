@@ -19,6 +19,10 @@ export interface SystemProbe {
   /** Time since the last keyboard or mouse input. */
   idleMs(): number;
   readGamepad: GamepadReader;
+  /** The PC's awake clock: ms running, not counting sleep. Tells a tracker stall apart from sleep. */
+  awakeMs?(): number;
+  /** Apps holding the microphone right now ("MSTeams", "Zoom"). */
+  microphoneUsers?(): string[];
 }
 
 export interface SampleRules {
@@ -26,6 +30,20 @@ export interface SampleRules {
   exclude: { apps: string[]; titleContains: string[]; domains: string[] };
   gaming: { games: string[] };
   browser: { fullUrlDomains: string[] };
+  /** Apps you read in without touching the keyboard, which wait longer before counting you idle. */
+  reading: { apps: string[]; idleThresholdMs: number };
+}
+
+/** Noise filters hold the microphone whenever another app does: they say nothing about a call. */
+const MIC_FILTERS = ['denoiseai', 'krisp', 'nvidia broadcast', 'nvbroadcast', 'audiodg'];
+/** Dictating to an assistant means you're there, but it isn't a call. */
+const DICTATION = ['claude', 'chatgpt', 'openai.codex', 'codex'];
+
+/** What the microphone says: whether you're talking to the PC, and the call app if it's a call. */
+export function microphoneState(users: readonly string[]): { talking: boolean; call: string | null } {
+  const real = users.filter((u) => !MIC_FILTERS.some((f) => u.toLowerCase().includes(f)));
+  const call = real.find((u) => !DICTATION.includes(u.toLowerCase())) ?? null;
+  return { talking: real.length > 0, call };
 }
 
 export interface Sample {
@@ -37,6 +55,8 @@ export interface Sample {
   locked: boolean;
   /** A game is being recorded, which counts as activity for later idle backdating. */
   inGame: boolean;
+  /** The microphone is in use (a call, dictation): you're there without touching anything. */
+  talking?: boolean;
 }
 
 export function isExcluded(window: ForegroundWindow, exclude: SampleRules['exclude']): boolean {
@@ -72,22 +92,34 @@ export function sample(
     });
   if (tab === 'hidden') return nothing;
 
+  let micUsers: string[] = [];
+  try {
+    micUsers = probe.microphoneUsers?.() ?? [];
+  } catch {
+    // The microphone is an extra: if it can't be read, carry on without it.
+  }
+  const { talking, call } = microphoneState(micUsers);
+
   const info: WindowInfo | null = window && {
     ...window,
     ...(tab?.domain ? { domain: tab.domain } : {}),
     ...(tab?.url ? { url: tab.url } : {}),
     ...editorContext(window, editorReports, now),
+    ...(call ? { call } : {}),
   };
 
   const inGame = window !== null && classifyGaming(window, rules.gaming.games)?.category === 'gaming';
-  if (!inGame && now - lastInputAt >= rules.idleThresholdMs) {
+  const reading = window !== null && rules.reading.apps.some((entry) => matchesApp(window, entry));
+  const threshold = reading ? Math.max(rules.idleThresholdMs, rules.reading.idleThresholdMs) : rules.idleThresholdMs;
+  // On a call you're there even with your hands off the keyboard, like in a game.
+  if (!inGame && !talking && now - lastInputAt >= threshold) {
     // Keep what was on screen, so reading can be told apart from being away.
     const activity: Activity = info ? { kind: 'idle', window: info } : { kind: 'idle' };
     return { activity, lastInputAt, locked: false, inGame };
   }
 
   // No foreground window happens briefly mid-switch and during UAC prompts.
-  if (!info) return { activity: 'unchanged', lastInputAt, locked: false, inGame };
+  if (!info) return { activity: 'unchanged', lastInputAt, locked: false, inGame, talking };
 
-  return { activity: { kind: 'window', ...info }, lastInputAt, locked: false, inGame };
+  return { activity: { kind: 'window', ...info }, lastInputAt, locked: false, inGame, talking };
 }

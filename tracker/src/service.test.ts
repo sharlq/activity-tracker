@@ -42,6 +42,8 @@ const CONFIG: Config = {
   gaming: { games: [] },
   browser: { fullUrlDomains: [] },
   api: { port: 0 },
+  backup: { keep: 14 },
+  reading: { apps: ['FoxitPDFReader'], idleThresholdMs: 10 * MINUTE },
 };
 const CHROME = (title: string): ForegroundWindow => ({
   processName: 'chrome.exe',

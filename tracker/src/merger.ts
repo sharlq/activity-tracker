@@ -19,6 +19,8 @@ export interface WindowInfo {
   project?: string;
   language?: string;
   branch?: string;
+  /** The app holding the microphone (Teams, Zoom...) while you're on a call. */
+  call?: string;
 }
 
 export type Activity =
@@ -31,7 +33,7 @@ export type Activity =
   | { kind: 'idle'; window?: WindowInfo };
 
 /** Details added by the extensions; absent and undefined mean the same thing. */
-const DETAILS = ['domain', 'url', 'project', 'language', 'branch'] as const;
+const DETAILS = ['domain', 'url', 'project', 'language', 'branch', 'call'] as const;
 
 export interface OpenEvent {
   activity: Activity;
@@ -49,12 +51,30 @@ export interface Tick {
   /** null closes the open event; 'unchanged' extends it without starting one. */
   activity: Activity | 'unchanged' | null;
   lastInputAt: number;
+  /**
+   * The PC's awake clock (time not asleep or hibernating), when known. A long wait
+   * between ticks while it kept running is the tracker stalling, not you leaving.
+   */
+  awakeAt?: number;
 }
 
 export interface TickResult {
   ops: Op[];
   /** How long the machine went unobserved before this tick, if it did. */
   gapMs: number | null;
+  /** How long the tracker stalled while the PC stayed awake, bridged as continuous time. */
+  stallMs?: number;
+}
+
+/** A stall longer than this is still treated as a gap: too long to vouch for what was in front. */
+export const MAX_STALL_MS = 5 * 60_000;
+
+/**
+ * True if the time between ticks was spent awake: the PC's awake clock moved as much
+ * as the wall clock, within a little slack for timer jitter.
+ */
+export function awakeThrough(elapsedMs: number, awakeElapsedMs: number): boolean {
+  return elapsedMs <= MAX_STALL_MS && Math.abs(elapsedMs - awakeElapsedMs) <= Math.max(2_000, elapsedMs * 0.1);
 }
 
 export function sameActivity(a: Activity, b: Activity): boolean {
@@ -79,6 +99,7 @@ export class EventMerger {
   private readonly maxGapMs: number;
   private open: OpenEvent | null;
   private lastTickAt: number | null;
+  private lastAwakeAt: number | null = null;
 
   /**
    * @param maxGapMs longest silence between ticks that still counts as continuous.
@@ -90,30 +111,37 @@ export class EventMerger {
     this.lastTickAt = resume?.end ?? null;
   }
 
-  tick({ at, activity, lastInputAt }: Tick): TickResult {
+  tick({ at, activity, lastInputAt, awakeAt }: Tick): TickResult {
     const elapsed = this.lastTickAt === null ? 0 : at - this.lastTickAt;
-    const gapped = elapsed > this.maxGapMs || elapsed < 0;
+    const late = elapsed > this.maxGapMs || elapsed < 0;
+    // Only a stall we can prove was spent awake is bridged; the first tick after a
+    // restart, a clock change, or a sleep stays a gap.
+    const stalled =
+      late && elapsed > 0 && awakeAt !== undefined && this.lastAwakeAt !== null && awakeThrough(elapsed, awakeAt - this.lastAwakeAt);
+    const gapped = late && !stalled;
     this.lastTickAt = at;
+    this.lastAwakeAt = awakeAt ?? null;
 
     const open = gapped ? null : this.open;
     const gapMs = gapped ? elapsed : null;
+    const extra = stalled ? { stallMs: elapsed } : {};
 
     if (activity === null) {
       this.open = null;
-      return { ops: [], gapMs };
+      return { ops: [], gapMs, ...extra };
     }
 
     if (activity === 'unchanged') {
       this.open = open;
-      if (!open) return { ops: [], gapMs };
+      if (!open) return { ops: [], gapMs, ...extra };
       open.end = at;
-      return { ops: [{ type: 'setEnd', end: at }], gapMs };
+      return { ops: [{ type: 'setEnd', end: at }], gapMs, ...extra };
     }
 
     if (open && sameActivity(open.activity, activity)) {
       open.end = at;
       this.open = open;
-      return { ops: [{ type: 'setEnd', end: at }], gapMs };
+      return { ops: [{ type: 'setEnd', end: at }], gapMs, ...extra };
     }
 
     const ops: Op[] = [];
@@ -129,6 +157,6 @@ export class EventMerger {
     }
     ops.push({ type: 'start', activity, start, end: at });
     this.open = { activity, start, end: at };
-    return { ops, gapMs };
+    return { ops, gapMs, ...extra };
   }
 }

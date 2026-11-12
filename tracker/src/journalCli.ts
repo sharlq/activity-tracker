@@ -7,14 +7,15 @@
 import { existsSync } from 'node:fs';
 import { loadConfig } from './config.ts';
 import { parseLocalDate } from './dates.ts';
-import type { Checkin, CheckinPart, Entry, Goal, GoalResult, Reminder, Task } from './journal.ts';
+import type { BlockOutcome } from './dayPlan.ts';
+import type { Checkin, CheckinPart, Entry, Goal, GoalResult, PlanBlock, Reminder, Task } from './journal.ts';
 import { dbPath, id, openJournal, options, parseDay, UsageError } from './cliShared.ts';
 import { PROJECT_COMMANDS, PROJECTS_USAGE } from './projectsCli.ts';
 import type { ReminderSchedule } from './planner.ts';
 import { dayKey, minutesOf, nextSlot, parseSchedule } from './planner.ts';
 import type { Sleep } from './report/index.ts';
 import { clockOf } from './report/index.ts';
-import { buildDay, buildWeek } from './ui.ts';
+import { buildDay, buildWeek, shiftByDays } from './ui.ts';
 
 export const JOURNAL_USAGE = `  raqib day [date] [--json]            Your day: summary, timeline, gaps to log, what you logged, tasks
   raqib log 07:15-09:00 "what" [--category meal] [--date D]
@@ -26,6 +27,9 @@ export const JOURNAL_USAGE = `  raqib day [date] [--json]            Your day: s
                                       How you feel (default: morning before 15:00, else evening)
   raqib goals [date]                  List a day's goals
   raqib goal add "text" [--date D]    Add a goal (also: goal met|partly|missed|clear|rm <id>)
+  raqib plan [date]                   The day's plan, block by block, against what happened
+  raqib plan add 09:00-11:00 "what" [--category study] [--date tomorrow]
+                                      Plan a block (also: plan rm <id>, plan copy <from> [--to D])
   raqib sleep [date]                  The night you woke from that day: logged or estimated
   raqib week [date] [--json]          The weekly review for the week (Monday to Sunday) holding that date
   raqib reminders                     List reminders
@@ -33,7 +37,7 @@ export const JOURNAL_USAGE = `  raqib day [date] [--json]            Your day: s
   raqib remind add "text" --at 09:00,21:00 [--days ...]
                                       Add a reminder (also: remind on|off|rm <id>)
 ${PROJECTS_USAGE}
-  (date: YYYY-MM-DD, today, or yesterday; default today)`;
+  (date: YYYY-MM-DD, today, yesterday, or tomorrow; default today)`;
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 const span = (a: number, b: number) => `${clock(a)}-${clock(b)}`;
@@ -119,6 +123,15 @@ function sleepLines(sleep: Sleep): string[] {
   return out;
 }
 
+const blockLine = (b: PlanBlock) => `  #${b.id}  ${span(b.start, b.end)}  ${duration(b.end - b.start).padStart(6)}  ${b.label}${b.category ? ` (${b.category})` : ''}`;
+const STATUS_WORDS: Record<BlockOutcome['status'], string> = { kept: 'kept', partly: 'partly', missed: 'missed', now: 'now', upcoming: 'to come' };
+function outcomeLine(o: BlockOutcome): string {
+  const head = `${blockLine(o.block)}  [${STATUS_WORDS[o.status]}${o.elapsedMs ? `, ${duration(o.keptMs)} as planned` : ''}]`;
+  const did = o.actual.slice(0, 3).map((a) => `${a.name} ${duration(a.ms)}`);
+  if (o.unknownMs >= 60_000) did.push(`unknown ${duration(o.unknownMs)}`);
+  return did.length ? `${head}\n        did: ${did.join(', ')}` : head;
+}
+
 const entryLine = (e: Entry) => `  #${e.id}  ${span(e.start, e.end)}  ${duration(e.end - e.start).padStart(6)}  ${e.label}${e.category ? ` (${e.category})` : ''}`;
 const taskLine = (t: Task) => `  #${t.id}  [${t.doneAt === null ? ' ' : 'x'}] ${t.text}${t.doneAt !== null ? `  (done ${clock(t.doneAt)})` : ''}`;
 const reminderLine = (r: Reminder, now: number) => {
@@ -140,7 +153,8 @@ async function day(args: string[]): Promise<number> {
     const r = view.report;
     const out: string[] = [];
     out.push(`رقيب: ${new Date(view.from).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`);
-    out.push(`Active on the PC ${duration(view.activeMs)} (idle ${duration(r.idleMs)}) · focused ${duration(view.focusMs)} · distractions ${duration(view.distractionMs)} · switches ${r.switches}`);
+    out.push(`Active on the PC ${duration(view.activeMs)} (idle ${duration(r.idleMs)}) · focused ${duration(view.focusMs)} · distractions ${duration(view.distractionMs)}${view.logged.ms ? ` (${duration(view.logged.ms)} of it logged off the PC)` : ''} · switches ${r.switches}`);
+    if (view.logged.phoneMs) out.push(`On the phone ${duration(view.logged.phoneMs)} (logged)${view.logged.phoneDistractionMs ? `, ${duration(view.logged.phoneDistractionMs)} of it social media or video` : ''}`);
     if (r.longestFocus) out.push(`Longest focus ${duration(r.longestFocus.ms)} (${span(r.longestFocus.start, r.longestFocus.end)})`);
 
     out.push('', 'Timeline (from the PC)');
@@ -161,6 +175,12 @@ async function day(args: string[]): Promise<number> {
     if (o.stretches.length) {
       out.push('', `On your other screens (${o.screens})`);
       for (const st of o.stretches) out.push(`  ${span(st.start, st.end)}  ${duration(st.end - st.start).padStart(6)}  screen ${st.screen}  ${st.name}${st.title && st.title !== st.name ? `: ${st.title}` : ''}`);
+    }
+
+    const pc = view.planComparison;
+    if (pc.blocks.length) {
+      out.push('', `Plan (${pc.blocks.length} block${pc.blocks.length === 1 ? '' : 's'}${pc.share !== null ? `, ${Math.round(pc.share * 100)}% of planned time so far as planned` : ''})`);
+      for (const o of pc.blocks) out.push(outcomeLine(o));
     }
 
     out.push('', `Gaps to log (${view.gaps.length}, ${duration(view.gapMs)})`);
@@ -390,6 +410,57 @@ function goal(args: string[]): number {
   }
 }
 
+async function plan(args: string[]): Promise<number> {
+  const [action, ...rest] = args;
+  const journal = openJournal();
+  try {
+    if (action === 'add') {
+      const { values, rest: words } = options(rest, ['category', 'date']);
+      const [when, ...what] = words;
+      const label = what.join(' ').trim();
+      if (!when || !label) throw new UsageError('Usage: raqib plan add 09:00-11:00 "what you plan" [--category study] [--date tomorrow]');
+      if (label.length > 200) throw new UsageError('Keep it to 200 characters');
+      const key = parseDay(values['date']);
+      const { start, end } = parseSpan(when, key);
+      const block = journal.addPlanBlock({ day: key, start, end, label, category: values['category']?.trim().toLowerCase() || null });
+      const overlapping = journal.planBlocks(key).filter((b) => b.id !== block.id && b.start < end && b.end > start);
+      console.log(`Planned for ${key}:\n${blockLine(block)}`);
+      if (overlapping.length) console.log(`Note: it overlaps:\n${overlapping.map(blockLine).join('\n')}`);
+      return 0;
+    }
+    if (action === 'rm') {
+      const ok = journal.deletePlanBlock(id(rest[0]));
+      console.log(ok ? `Removed block #${rest[0]}.` : `There is no block #${rest[0]}.`);
+      return ok ? 0 : 1;
+    }
+    if (action === 'copy') {
+      const { values, rest: days } = options(rest, ['to']);
+      const from = parseDay(days[0] ?? 'yesterday');
+      const to = parseDay(values['to']);
+      const shift = Math.round(((parseLocalDate(to) as number) - (parseLocalDate(from) as number)) / 86_400_000);
+      if (shift === 0) throw new UsageError('Copy a plan to a different day');
+      const added = journal.copyPlan(from, to, (ms) => shiftByDays(ms, shift));
+      console.log(`Copied ${added.length} block${added.length === 1 ? '' : 's'} from ${from} to ${to}${added.length ? `:\n${added.map(blockLine).join('\n')}` : '.'}`);
+      return 0;
+    }
+    // raqib plan [date]
+    const key = parseDay(action);
+    if (!existsSync(dbPath())) throw new UsageError('No data yet: start رقيب first.');
+    const view = await buildDay({ journal, dbPath: dbPath(), config: loadConfig() }, key, Date.now(), { claude: false });
+    const pc = view.planComparison;
+    if (pc.blocks.length === 0) {
+      console.log(`No plan for ${key} yet. Add one: raqib plan add 09:00-11:00 "what" --date ${key}`);
+      return 0;
+    }
+    console.log(`Plan for ${key}: ${pc.blocks.length} block${pc.blocks.length === 1 ? '' : 's'}, ${duration(pc.plannedMs)} planned`);
+    if (pc.share !== null) console.log(`So far ${duration(pc.keptMs)} of ${duration(pc.elapsedMs)} went as planned (${Math.round(pc.share * 100)}%) · kept ${pc.kept}, partly ${pc.partly}, missed ${pc.missed}`);
+    console.log(pc.blocks.map(outcomeLine).join('\n'));
+    return 0;
+  } finally {
+    journal.close();
+  }
+}
+
 async function sleep(args: string[]): Promise<number> {
   const key = parseDay(args[0]);
   if (!existsSync(dbPath())) throw new UsageError('No data yet: start رقيب first.');
@@ -422,19 +493,19 @@ async function week(args: string[]): Promise<number> {
     const t = view.totals;
     const avg = (a: { value: number } | null) => (a ? duration(a.value) : '-');
     const out: string[] = [`رقيب: the week of ${view.start} to ${view.end}`];
-    out.push(`Focused ${avg(t.focusMs)} a day (last week ${avg(view.previous.focusMs)}) · on the PC ${avg(t.activeMs)} a day · distractions ${avg(t.distractionMs)} a day`);
+    out.push(`Focused ${avg(t.focusMs)} a day (last week ${avg(view.previous.focusMs)}) · on the PC ${avg(t.activeMs)} a day · distractions ${avg(t.distractionMs)} a day${t.phoneMs ? ` · phone ${avg(t.phoneMs)} a day (${t.phoneMs.days} day${t.phoneMs.days === 1 ? '' : 's'} logged)` : ''}`);
     out.push(
       `Sleep ${avg(t.sleepMs)} a night (last week ${avg(view.previous.sleepMs)})${t.bedtime && t.wake ? ` · bedtime ${clockOf(t.bedtime.minutes)} ±${t.bedtime.spread}m · waking ${clockOf(t.wake.minutes)} ±${t.wake.spread}m` : ''}`,
     );
     out.push(
       `Mood ${t.mood ? t.mood.value.toFixed(1) : '-'}/5 · energy ${t.energy ? t.energy.value.toFixed(1) : '-'}/5 · goals met ${t.goalsMet}/${t.goalsTotal} · tasks done ${t.tasksDone}/${t.tasksTotal} · unlogged ${duration(t.gapMs)}`,
     );
-    out.push('', 'Day        Sleep    Mood  Energy  Focused  Distr.   Goals  Tasks');
+    out.push('', 'Day        Sleep    Mood  Energy  Focused  Distr.   Phone    Goals  Tasks');
     for (const d of view.days) {
       const name = new Date(parseLocalDate(d.date) as number).toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit' });
       const sleepText = d.sleep.night ? `${duration(d.sleep.totalMs)}${d.sleep.night.source === 'estimated' ? '~' : ''}` : '-';
       out.push(
-        `${name.padEnd(10)} ${sleepText.padEnd(8)} ${(d.mood ? d.mood.toFixed(1) : '-').padEnd(5)} ${(d.energy ? d.energy.toFixed(1) : '-').padEnd(7)} ${duration(d.focusMs).padEnd(8)} ${duration(d.distractionMs).padEnd(8)} ${(d.goalsTotal ? `${d.goalsMet}/${d.goalsTotal}` : '-').padEnd(6)} ${d.tasksTotal ? `${d.tasksDone}/${d.tasksTotal}` : '-'}`,
+        `${name.padEnd(10)} ${sleepText.padEnd(8)} ${(d.mood ? d.mood.toFixed(1) : '-').padEnd(5)} ${(d.energy ? d.energy.toFixed(1) : '-').padEnd(7)} ${duration(d.focusMs).padEnd(8)} ${duration(d.distractionMs).padEnd(8)} ${(d.phoneMs ? duration(d.phoneMs) : '-').padEnd(8)} ${(d.goalsTotal ? `${d.goalsMet}/${d.goalsTotal}` : '-').padEnd(6)} ${d.tasksTotal ? `${d.tasksDone}/${d.tasksTotal}` : '-'}`,
       );
     }
     out.push('(~ sleep estimated from the PC)');
@@ -473,6 +544,7 @@ const COMMANDS: Record<string, (args: string[]) => number | Promise<number>> = {
   goals,
   goal,
   sleep,
+  plan,
   week,
   reminders,
   remind,

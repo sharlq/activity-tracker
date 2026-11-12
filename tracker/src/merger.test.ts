@@ -110,6 +110,35 @@ describe('EventMerger: gaps', () => {
     );
   });
 
+  it('bridges a stall while the PC stayed awake, and reports it as a stall', () => {
+    const a = app('main.ts');
+    const merger = new EventMerger(MAX_GAP);
+    merger.tick({ at: 0, activity: a, lastInputAt: 0, awakeAt: 1_000 });
+    const stalled = merger.tick({ at: 54_000, activity: a, lastInputAt: 50_000, awakeAt: 55_000 });
+    assert.equal(stalled.gapMs, null);
+    assert.equal(stalled.stallMs, 54_000);
+    assert.deepEqual(stalled.ops, [{ type: 'setEnd', end: 54_000 }]);
+  });
+
+  it('still treats sleep as a gap when the awake clock stood still', () => {
+    const a = app('main.ts');
+    const merger = new EventMerger(MAX_GAP);
+    merger.tick({ at: 0, activity: a, lastInputAt: 0, awakeAt: 1_000 });
+    const slept = merger.tick({ at: 120_000, activity: a, lastInputAt: 120_000, awakeAt: 1_200 });
+    assert.equal(slept.gapMs, 120_000);
+    assert.equal(slept.stallMs, undefined);
+  });
+
+  it('never bridges a stall longer than five minutes, or one with no awake clock', () => {
+    const a = app('main.ts');
+    const long = new EventMerger(MAX_GAP);
+    long.tick({ at: 0, activity: a, lastInputAt: 0, awakeAt: 0 });
+    assert.equal(long.tick({ at: 6 * 60_000, activity: a, lastInputAt: 0, awakeAt: 6 * 60_000 }).gapMs, 6 * 60_000);
+    const unknown = new EventMerger(MAX_GAP);
+    unknown.tick({ at: 0, activity: a, lastInputAt: 0 });
+    assert.equal(unknown.tick({ at: 30_000, activity: a, lastInputAt: 0, awakeAt: 30_000 }).gapMs, 30_000);
+  });
+
   it('reports the length of the gap', () => {
     const merger = new EventMerger(MAX_GAP);
     const a = app('x');

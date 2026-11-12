@@ -3,7 +3,9 @@
 // did is kept per day, and a plan says how much to do on which day.
 //
 // Everything here is pure: the journal reads the rows, these functions make sense of them.
+import { domainMatches } from './browser.ts';
 import { parseLocalDate } from './dates.ts';
+import type { Activity, WindowInfo } from './merger.ts';
 
 export type ProjectStatus = 'active' | 'paused' | 'done';
 
@@ -16,6 +18,53 @@ export interface Project {
   due: string | null;
   position: number;
   createdAt: number;
+  /**
+   * Words that make PC time count toward this project: a window title containing
+   * one ("AWS Certified"), a site ("aws.amazon.com"), an app ("FoxitPDFReader"),
+   * or an editor workspace. Empty: only what you report counts.
+   */
+  match: string[];
+}
+
+/** True if this window's time belongs to a project with these match words. */
+export function matchesProject(window: WindowInfo, match: readonly string[]): boolean {
+  const title = window.title.toLowerCase();
+  const app = window.processName.toLowerCase().replace(/\.exe$/, '');
+  return match.some((raw) => {
+    const word = raw.trim().toLowerCase();
+    if (!word) return false;
+    return (
+      title.includes(word) ||
+      app === word.replace(/\.exe$/, '') ||
+      (window.domain !== undefined && domainMatches(window.domain, word)) ||
+      (window.project !== undefined && window.project.toLowerCase() === word)
+    );
+  });
+}
+
+/**
+ * Active PC time per project in [from, to): window events matching a project's
+ * words. A moment matching two projects counts for the first, in the order given.
+ * Idle time never counts, even with the project's PDF in front.
+ */
+export function pcTimeByProject(
+  events: readonly { start: number; end: number; activity: Activity }[],
+  projects: readonly Pick<Project, 'id' | 'match'>[],
+  from: number,
+  to: number,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  const withWords = projects.filter((p) => p.match.length > 0);
+  if (withWords.length === 0) return out;
+  for (const e of events) {
+    if (e.activity.kind !== 'window') continue;
+    const ms = Math.min(e.end, to) - Math.max(e.start, from);
+    if (ms <= 0) continue;
+    const { kind: _kind, ...window } = e.activity;
+    const owner = withWords.find((p) => matchesProject(window, p.match));
+    if (owner) out.set(owner.id, (out.get(owner.id) ?? 0) + ms);
+  }
+  return out;
 }
 
 export interface Subtask {
@@ -281,6 +330,8 @@ export interface ProjectWeek {
   /** Planned target days that week and how many were met (past days and today only). */
   targetDays: number;
   targetsMet: number;
+  /** Active PC time that week from its match words (filled in by the window's week page). */
+  pcMs?: number;
 }
 
 export function projectWeek(view: ProjectOverview, progress: Progress[], days: ProjectDay[], targets: Target[], from: string, to: string, today: string): ProjectWeek {

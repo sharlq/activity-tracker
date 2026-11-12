@@ -74,6 +74,7 @@ const CreateToolhelp32Snapshot = kernel32.func('__stdcall', 'CreateToolhelp32Sna
 const Process32FirstW = kernel32.func('__stdcall', 'Process32FirstW', 'int', [HANDLE, 'void *']);
 const Process32NextW = kernel32.func('__stdcall', 'Process32NextW', 'int', [HANDLE, 'void *']);
 const GetTickCount = kernel32.func('__stdcall', 'GetTickCount', 'uint32', []);
+const QueryUnbiasedInterruptTime = kernel32.func('__stdcall', 'QueryUnbiasedInterruptTime', 'int', ['void *']);
 const OpenMutexW = kernel32.func('__stdcall', 'OpenMutexW', HANDLE, ['uint32', 'int', 'str16']);
 const CreateMutexW = kernel32.func('__stdcall', 'CreateMutexW', HANDLE, ['void *', 'int', 'str16']);
 
@@ -209,6 +210,13 @@ function idleMs(): number {
   return ((GetTickCount() as number) - info.readUInt32LE(4)) >>> 0;
 }
 
+/** Milliseconds the PC has been running, not counting sleep or hibernation (100 ns units underneath). */
+function awakeMs(): number {
+  const out = Buffer.alloc(8);
+  if (!QueryUnbiasedInterruptTime(out)) return Number.NaN;
+  return Number(out.readBigUInt64LE(0) / 10_000n);
+}
+
 function readGamepad(slot: number): GamepadState | null {
   if (!XInputGetState) return null;
   const state = Buffer.alloc(XINPUT_STATE_BYTES);
@@ -312,7 +320,7 @@ function screenWindows(): ScreenWindow[] {
 /** Reads each screen's top window. Kept off SystemProbe so the focused-window path doesn't depend on it. */
 export const win32Screens = { screenWindows, screenCount: () => monitors().length };
 
-export const win32Probe: SystemProbe = { isSessionLocked, foregroundWindow, idleMs, readGamepad };
+export const win32Probe: SystemProbe = { isSessionLocked, foregroundWindow, idleMs, readGamepad, awakeMs };
 
 /**
  * True if we are now the only tracker writing to this data folder. The kernel

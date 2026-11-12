@@ -178,6 +178,29 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_screen_start ON screen_events (start_ms);
   CREATE INDEX idx_screen_end ON screen_events (end_ms);
   `,
+  // The app holding the microphone, so time on a call isn't idle.
+  `
+  ALTER TABLE events ADD COLUMN call TEXT;
+  `,
+  // Words that make PC time count toward a project (a JSON list).
+  `
+  ALTER TABLE projects ADD COLUMN match_words TEXT;
+  `,
+  // The day's plan: blocks of time set the night before or in the morning, to hold
+  // the day up against.
+  `
+  CREATE TABLE plan_blocks (
+    id         INTEGER PRIMARY KEY,
+    day        TEXT NOT NULL,
+    start_ms   INTEGER NOT NULL,
+    end_ms     INTEGER NOT NULL,
+    label      TEXT NOT NULL,
+    category   TEXT,
+    created_ms INTEGER NOT NULL,
+    CHECK (end_ms > start_ms)
+  );
+  CREATE INDEX idx_plan_day ON plan_blocks (day);
+  `,
 ];
 
 /** Brings a database up to the newest schema. Safe to call from several connections. */
@@ -190,7 +213,7 @@ export function migrate(db: Database.Database): void {
 }
 
 /** Optional detail columns, named the same in the table and on Activity. */
-const DETAIL_COLUMNS = ['domain', 'url', 'project', 'language', 'branch'] as const;
+const DETAIL_COLUMNS = ['domain', 'url', 'project', 'language', 'branch', 'call'] as const;
 type DetailColumn = (typeof DETAIL_COLUMNS)[number];
 
 export interface StoredEvent extends OpenEvent {
@@ -293,7 +316,7 @@ export class Store {
 
   /**
    * Deletes events, background audio, other screens, and your logged entries that ended before
-   * the cutoff, and tasks, check-ins, goals, weekly reviews, and project history
+   * the cutoff, and tasks, check-ins, goals, day plans, weekly reviews, and project history
    * (progress, notes, targets) for days before it, then reclaims the file space.
    * Returns how many events went.
    */
@@ -317,6 +340,7 @@ export class Store {
           this.db.prepare('DELETE FROM tasks WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM checkins WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM goals WHERE day < ?').run(day).changes +
+          this.db.prepare('DELETE FROM plan_blocks WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM reviews WHERE week < ?').run(day).changes +
           this.db.prepare('DELETE FROM progress WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM project_days WHERE day < ?').run(day).changes +

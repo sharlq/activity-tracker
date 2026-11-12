@@ -12,7 +12,9 @@ function h(tag, attrs = {}, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
     else if (key === 'class') el.className = value;
-    else if (key === 'style' && typeof value === 'object') Object.assign(el.style, value);
+    else if (key === 'style' && typeof value === 'object') {
+      for (const [prop, v] of Object.entries(value)) prop.startsWith('--') ? el.style.setProperty(prop, v) : (el.style[prop] = v);
+    }
     else if (key === 'value') el.value = value;
     else if (key === 'checked') el.checked = Boolean(value);
     else el.setAttribute(key, value === true ? '' : String(value));
@@ -30,6 +32,23 @@ function say(message, error = false) {
   snackbar.className = `show${error ? ' error' : ''}`;
   clearTimeout(snackTimer);
   snackTimer = setTimeout(() => (snackbar.className = ''), error ? 5000 : 2200);
+}
+
+/**
+ * Runs `fn` at most once at a time: a second Enter or click while the first save is
+ * still on its way is ignored, so one answer is never saved twice.
+ */
+function oneAtATime(fn) {
+  let busy = false;
+  return async (...args) => {
+    if (busy) return;
+    busy = true;
+    try {
+      return await fn(...args);
+    } finally {
+      busy = false;
+    }
+  };
 }
 
 class SignedOut extends Error {}
@@ -129,7 +148,7 @@ function onDay(key, hhmm) {
 // Category colours are theme tokens in style.css, so light and dark each get their own value.
 const COLORS = {
   work: 'var(--cat-work)', learning: 'var(--cat-learning)', debate: 'var(--cat-debate)', 'social media': 'var(--cat-social)', video: 'var(--cat-video)',
-  news: 'var(--cat-news)', gaming: 'var(--cat-gaming)', 'game launcher': 'var(--cat-launcher)', messaging: 'var(--cat-messaging)', other: 'var(--cat-other)', idle: 'var(--cat-idle)',
+  news: 'var(--cat-news)', gaming: 'var(--cat-gaming)', 'game launcher': 'var(--cat-launcher)', messaging: 'var(--cat-messaging)', meeting: 'var(--cat-meeting)', entertainment: 'var(--cat-entertainment)', other: 'var(--cat-other)', idle: 'var(--cat-idle)',
 };
 const FOCUS = new Set(['work', 'learning', 'debate']);
 const DISTRACTION = new Set(['social media', 'video', 'news', 'gaming', 'game launcher']);
@@ -143,7 +162,7 @@ const swatch = (category) => h('i', { class: `dot${COLORS[category] ? '' : ' log
 /** Quick answers for a gap: the label to log, the category it goes under, and its icon. */
 const QUICK = [
   ['Sleep', 'sleep', 'sleep'], ['Meal', 'meal', 'meal'], ['Out / errands', 'errand', 'errand'], ['Exercise', 'exercise', 'exercise'], ['Commute', 'commute', 'commute'],
-  ['With people', 'social', 'social'], ['Prayer', 'prayer', 'prayer'], ['Rest', 'rest', 'rest'], ['Chores', 'chores', 'chores'], ['On my phone', 'social media', 'phone'],
+  ['With people', 'social', 'social'], ['Prayer', 'prayer', 'prayer'], ['Rest', 'rest', 'rest'], ['Entertainment', 'entertainment', 'music'], ['Chores', 'chores', 'chores'], ['On my phone', 'social media', 'phone'],
 ];
 
 /** The date and earlier/later arrows in the title bar, for pages that are about one day. */
@@ -256,6 +275,20 @@ function timelineCard(day) {
       lane: 'you', start: e.start, end: e.end, cls: 'logged', label: e.label,
       info: { kind: `Logged${e.category ? ` · ${e.category}` : ''}`, swatch: h('i', { class: 'dot logged' }), heading: e.label, lines: [], when: when(e.start, e.end), hint: 'Logged by you · click to zoom in' },
     })),
+    ...day.planComparison.blocks.map((o) => ({
+      lane: 'plan', start: o.block.start, end: o.block.end, cls: `plan ${o.status}`, vars: { '--c': STATUS_COLOR[o.status] }, label: o.block.label,
+      info: {
+        kind: `Planned${o.block.category ? ` · ${planCategoryName(o.block.category)}` : ''} · ${STATUS[o.status][0]}`,
+        swatch: h('i', { class: 'dot', style: { background: STATUS_COLOR[o.status] } }),
+        heading: o.block.label,
+        lines: [
+          o.elapsedMs ? `${duration(o.keptMs)} of ${duration(o.elapsedMs)} so far as planned` : null,
+          o.actual.length ? `Did: ${o.actual.slice(0, 3).map((a) => `${a.name} ${duration(a.ms)}`).join(', ')}` : null,
+        ],
+        when: when(o.block.start, o.block.end),
+        hint: 'Click to zoom in',
+      },
+    })),
   ];
 
   const lanesBox = h('div', { class: 'timeline tl-lanes' });
@@ -295,7 +328,7 @@ function timelineCard(day) {
             'div',
             {
               class: `bar${item.cls ? ` ${item.cls}` : ''}`,
-              style: { ...pos(item.start, item.end), ...(item.color ? { background: item.color } : {}) },
+              style: { ...pos(item.start, item.end), ...(item.color ? { background: item.color } : {}), ...(item.vars ?? {}) },
               onmouseenter: (e) => showTip(e, item.info),
               onmousemove: moveTip,
               onmouseleave: hideTip,
@@ -330,6 +363,7 @@ function timelineCard(day) {
               ((Math.min(job.end, view.to) - Math.max(job.start, view.from)) / total) * width > 90 ? h('span', {}, `Job · ${span(job.start, job.end)}`) : null) : null,
             now?.cloneNode())]
         : []),
+      ...(day.plan.length ? [h('span', { class: 'lane-name' }, 'Plan'), h('div', { class: 'lane plan-lane' }, band(), lane('plan'), now?.cloneNode())] : []),
       h('span', { class: 'lane-name' }, 'On screen'), h('div', { class: 'lane' }, band(), lane('screen'), now),
       h('span', { class: 'lane-name' }, 'Playing'), h('div', { class: 'lane thin' }, band(), lane('sound'), now?.cloneNode()),
       h('span', { class: 'lane-name' }, 'Logged'), h('div', { class: 'lane' }, band(), lane('you'), now?.cloneNode()),
@@ -437,6 +471,7 @@ function timelineCard(day) {
       report.entries.length ? h('span', {}, h('i', { class: 'dot logged' }), 'Logged') : null,
       day.gaps.length ? h('span', {}, h('i', { class: 'dot dot-gap' }), 'Not logged yet') : null,
       day.job ? h('span', {}, h('i', { class: 'dot dot-job' }), 'Job hours') : null,
+      day.plan.length ? h('span', {}, h('i', { class: 'dot dot-plan' }), 'Planned') : null,
     ),
   );
   draw();
@@ -580,7 +615,7 @@ function categoriesCard(day) {
 
 function tasksCard(dayKeyValue, tasks, refresh, { title = 'Tasks', note, allowAdd = true, extra, empty } = {}) {
   const input = h('input', { type: 'text', dir: 'auto', placeholder: 'Add a task and press Enter', 'aria-label': 'New task' });
-  const add = async () => {
+  const add = oneAtATime(async () => {
     const text = input.value.trim();
     if (!text) return;
     try {
@@ -590,7 +625,7 @@ function tasksCard(dayKeyValue, tasks, refresh, { title = 'Tasks', note, allowAd
     } catch (error) {
       handle(error);
     }
-  };
+  });
   input.addEventListener('keydown', (e) => e.key === 'Enter' && add());
   const done = tasks.filter((t) => t.doneAt !== null).length;
   return card(
@@ -665,7 +700,7 @@ function gapCard(day, gap, refresh, categories) {
       },
     }, icon(ic), text),
   );
-  const save = async () => {
+  const save = oneAtATime(async () => {
     const text = label.value.trim();
     if (!text) {
       label.focus();
@@ -682,7 +717,7 @@ function gapCard(day, gap, refresh, categories) {
     } catch (error) {
       handle(error);
     }
-  };
+  });
   label.addEventListener('keydown', (e) => e.key === 'Enter' && save());
   const why = gap.kind === 'idle' ? `PC on but untouched${gap.onScreen ? `, ${gap.onScreen} on screen` : ''}` : 'PC off, asleep, or locked';
   return h(
@@ -750,7 +785,8 @@ function dayStats(day) {
     'div',
     { class: 'stats' },
     stat('Active on the PC', duration(day.activeMs), `${duration(r.idleMs)} idle`),
-    stat('Focused', duration(day.focusMs), `${duration(day.distractionMs)} on distractions`),
+    stat('Focused', duration(day.focusMs), `${duration(day.distractionMs)} on distractions${day.logged.ms ? `, ${duration(day.logged.ms)} logged off the PC` : ''}`),
+    day.logged.phoneMs ? stat('On the phone', duration(day.logged.phoneMs), day.logged.phoneDistractionMs ? `${duration(day.logged.phoneDistractionMs)} social media or video` : 'logged') : null,
     stat('Longest focus', f ? duration(f.ms) : '—', f ? span(f.start, f.end) : null),
     stat('Switches', String(r.switches), 'focus ⇄ distraction'),
     stat('Background sound', duration(r.multitasking.listeningMs), r.multitasking.whileActiveMs ? `${duration(r.multitasking.whileActiveMs)} while busy` : null),
@@ -834,7 +870,7 @@ const RESULTS = [['met', 'Met'], ['partly', 'Partly'], ['missed', 'Missed']];
 /** The day's goals. `review` shows how each went (evening); otherwise they can be added (morning). */
 function goalsCard(dayKeyValue, goals, refresh, { title = "Today's goals", note, review = false, allowAdd = true } = {}) {
   const input = h('input', { type: 'text', placeholder: goals.length ? 'Another goal' : 'The one thing that would make today a good day', 'aria-label': 'New goal' });
-  const add = async () => {
+  const add = oneAtATime(async () => {
     const text = input.value.trim();
     if (!text) return;
     try {
@@ -844,7 +880,7 @@ function goalsCard(dayKeyValue, goals, refresh, { title = "Today's goals", note,
     } catch (error) {
       handle(error);
     }
-  };
+  });
   input.addEventListener('keydown', (e) => e.key === 'Enter' && add());
   const call = async (path, options) => {
     try {
@@ -895,7 +931,7 @@ function sleepCard(day, refresh, { title = 'Last night' } = {}) {
   const { night, naps, napMs } = day.sleep;
   const bedInput = h('input', { type: 'time', value: night ? clock(night.start) : '23:30', 'aria-label': 'Went to sleep' });
   const wakeInput = h('input', { type: 'time', value: night ? clock(night.end) : '07:00', 'aria-label': 'Woke up' });
-  const logSleep = async (start, end) => {
+  const logSleep = oneAtATime(async (start, end) => {
     try {
       await api('/entries', { method: 'POST', body: { start, end, label: 'Sleep', category: 'sleep' } });
       say('Sleep logged');
@@ -903,7 +939,7 @@ function sleepCard(day, refresh, { title = 'Last night' } = {}) {
     } catch (error) {
       handle(error);
     }
-  };
+  });
   const fromInputs = () => {
     // A bedtime after noon was the evening before.
     const [bh] = bedInput.value.split(':').map(Number);
@@ -944,13 +980,209 @@ function sleepCard(day, refresh, { title = 'Last night' } = {}) {
   );
 }
 
+// ------------------------------------------------------------------ the day's plan
+
+/** Quick picks for a planned block: the label and the category it's held to. */
+const PLAN_QUICK = [
+  ['Deep work', 'work', 'projects'], ['Study', 'study', 'reports'], ['Exercise', 'exercise', 'exercise'], ['Meal', 'meal', 'meal'],
+  ['Prayer', 'prayer', 'prayer'], ['Errands', 'errand', 'errand'], ['With people', 'social', 'social'], ['Entertainment', 'entertainment', 'music'], ['Rest', 'rest', 'rest'],
+];
+const STATUS = {
+  kept: ['Kept', 'good'], partly: ['Partly', 'dawn'], missed: ['Missed', 'danger'], now: ['Now', 'accent'], upcoming: ['To come', ''],
+};
+/** Plan blocks are coloured by how they went, so the lane reads as plan vs actual. */
+const STATUS_COLOR = { kept: 'var(--good)', partly: 'var(--dawn)', missed: 'var(--danger)', now: 'var(--accent)', upcoming: 'var(--accent)' };
+/** "focus" in a plan means any focused work, whatever its category. */
+const planCategoryName = (c) => (c === 'focus' ? 'any focus' : c);
+
+/** A block's times on its day; an end at or before the start runs past midnight. */
+function blockTimes(key, from, until) {
+  const start = onDay(key, from);
+  let end = onDay(key, until);
+  if (end <= start) end = onDay(shiftDay(key, 1), until);
+  return { start, end };
+}
+
+/** The plan as one bar across the day, so its shape shows at a glance. */
+function planStrip(key, blocks, outcomes) {
+  const from = parseDay(key);
+  const to = parseDay(shiftDay(key, 1));
+  const total = to - from;
+  const byId = new Map((outcomes ?? []).map((o) => [o.block.id, o]));
+  const now = Date.now();
+  return h(
+    'div',
+    { class: 'plan-strip' },
+    h(
+      'div',
+      { class: 'plan-strip-track' },
+      blocks.map((b) => {
+        const o = byId.get(b.id);
+        const left = ((Math.max(b.start, from) - from) / total) * 100;
+        const width = ((Math.min(b.end, to) - Math.max(b.start, from)) / total) * 100;
+        return h('div', {
+          class: `plan-chunk${o ? ` ${o.status}` : ''}`,
+          style: { left: `${left}%`, width: `${width}%`, '--c': o ? STATUS_COLOR[o.status] : 'var(--accent)' },
+          title: `${span(b.start, b.end)} ${b.label}${o ? ` · ${STATUS[o.status][0]}` : ''}`,
+        });
+      }),
+      now >= from && now < to ? h('div', { class: 'plan-strip-now', style: { left: `${((now - from) / total) * 100}%` } }) : null,
+    ),
+    h('div', { class: 'plan-strip-axis' }, [0, 3, 6, 9, 12, 15, 18, 21, 24].map((hr) => h('span', { style: { left: `${(hr / 24) * 100}%` } }, `${pad(hr % 24)}`))),
+  );
+}
+
+/**
+ * Lays out a day's plan: blocks of time with what you'll do. Everything saves as you go.
+ * `copyFrom` offers another day's plan as a starting point while this one is empty.
+ */
+function planEditor(key, blocks, refresh, categories, { title = 'Plan the day', note, copyFrom, outcomes } = {}) {
+  const call = async (path, options, message) => {
+    try {
+      await api(path, options);
+      if (message) say(message);
+      await refresh();
+    } catch (error) {
+      handle(error);
+    }
+  };
+  const categorySelect = (value) =>
+    h(
+      'select',
+      { 'aria-label': 'Category' },
+      h('option', { value: '' }, 'Category'),
+      h('option', { value: 'focus', selected: value === 'focus' }, 'any focus'),
+      categories.map((c) => h('option', { value: c, selected: value === c }, c)),
+    );
+
+  const rows = blocks.map((b) => {
+    const startInput = h('input', { type: 'time', value: clock(b.start), 'aria-label': 'From' });
+    const endInput = h('input', { type: 'time', value: clock(b.end), 'aria-label': 'Until' });
+    const label = h('input', { type: 'text', dir: 'auto', value: b.label, 'aria-label': 'What you plan to do' });
+    const category = categorySelect(b.category);
+    category.value = b.category ?? '';
+    const before = () => [startInput.value, endInput.value, label.value.trim(), category.value].join('|');
+    const initial = before();
+    const save = oneAtATime(async () => {
+      if (before() === initial) return;
+      if (!label.value.trim()) return say('Say what you plan to do', true);
+      await call(`/plan/${b.id}`, { method: 'PUT', body: { ...blockTimes(key, startInput.value, endInput.value), label: label.value.trim(), category: category.value || null } });
+    });
+    const row = h(
+      'li',
+      { class: 'plan-row' },
+      startInput, h('span', { class: 'to' }, '–'), endInput, label, category,
+      h('button', { class: 'icon-btn', title: 'Remove block', 'aria-label': `Remove ${b.label}`, onclick: () => call(`/plan/${b.id}`, { method: 'DELETE' }) }, '×'),
+    );
+    // Saves once you leave the row, so typing a time doesn't redraw the page under you.
+    row.addEventListener('focusout', (e) => !row.contains(e.relatedTarget) && save());
+    category.addEventListener('change', save);
+    label.addEventListener('keydown', (e) => e.key === 'Enter' && save());
+    return row;
+  });
+
+  // The next block starts where the last one ends, or at the next half hour today.
+  const last = blocks.at(-1);
+  const startDefault = (() => {
+    if (last && dayKey(last.end) === key) return clock(last.end);
+    if (key === today()) {
+      const d = new Date(Date.now() + 30 * 60000);
+      d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
+      return dayKey(d.getTime()) === key ? clock(d.getTime()) : '23:00';
+    }
+    return '09:00';
+  })();
+  const [sh, sm] = startDefault.split(':').map(Number);
+  const startInput = h('input', { type: 'time', value: startDefault, 'aria-label': 'From' });
+  const endInput = h('input', { type: 'time', value: `${pad((sh + 1) % 24)}:${pad(sm)}`, 'aria-label': 'Until' });
+  const label = h('input', { type: 'text', dir: 'auto', placeholder: 'What will you do?', 'aria-label': 'What you plan to do' });
+  const category = categorySelect(null);
+  const add = oneAtATime(async () => {
+    const text = label.value.trim();
+    if (!text) {
+      label.focus();
+      return say('Say what you plan to do', true);
+    }
+    await call('/plan', { method: 'POST', body: { day: key, ...blockTimes(key, startInput.value, endInput.value), label: text, category: category.value || null } });
+  });
+  label.addEventListener('keydown', (e) => e.key === 'Enter' && add());
+  const chips = PLAN_QUICK.map(([text, cat, ic]) =>
+    h('button', {
+      class: 'chip',
+      type: 'button',
+      onclick: (e) => {
+        label.value = text;
+        category.value = cat;
+        for (const chip of e.currentTarget.parentElement.children) chip.classList.toggle('on', chip === e.currentTarget);
+        label.focus();
+      },
+    }, icon(ic), text),
+  );
+
+  const plannedMs = blocks.reduce((s, b) => s + (b.end - b.start), 0);
+  return card(
+    title,
+    note ?? (blocks.length ? `${blocks.length} block${blocks.length === 1 ? '' : 's'} · ${duration(plannedMs)} planned` : 'What you’ll do, and when'),
+    blocks.length ? planStrip(key, blocks, outcomes) : null,
+    blocks.length ? h('ul', { class: 'list plan-list' }, rows) : h('p', { class: 'empty' }, 'Nothing planned yet. Add the day’s main blocks: work, study, the gym, time with people.'),
+    !blocks.length && copyFrom?.count
+      ? h('div', { class: 'row', style: { marginTop: '10px' } },
+          h('button', { class: 'btn soft sm', onclick: () => call('/plan/copy', { method: 'POST', body: { from: copyFrom.day, to: key } }, 'Plan copied: adjust what’s different') },
+            icon('arrowin'), `Start from ${copyFrom.label} (${copyFrom.count} block${copyFrom.count === 1 ? '' : 's'})`))
+      : null,
+    h('div', { class: 'chips plan-chips' }, chips),
+    h('div', { class: 'plan-form' }, startInput, h('span', { class: 'to' }, 'to'), endInput, label, category, h('button', { class: 'btn primary', onclick: add }, icon('plus'), 'Add')),
+  );
+}
+
+/** Each planned block next to what actually filled its time. */
+function planVsActualCard(day, refresh, { title = 'Plan vs what happened', editable = false, copyFrom } = {}) {
+  const pc = day.planComparison;
+  const summary = pc.share === null
+    ? `${pc.blocks.length} block${pc.blocks.length === 1 ? '' : 's'} · nothing started yet`
+    : [`${Math.round(pc.share * 100)}% as planned`, pc.kept ? `${pc.kept} kept` : null, pc.partly ? `${pc.partly} partly` : null, pc.missed ? `${pc.missed} missed` : null].filter(Boolean).join(' · ');
+  const items = pc.blocks.map((o) => {
+    const b = o.block;
+    const [word, tone] = STATUS[o.status];
+    const blockMs = b.end - b.start;
+    const did = o.actual.slice(0, 3).map((a) => h('span', { class: a.kept ? 'did kept' : 'did' }, a.kept ? '✓ ' : '', `${a.name} ${duration(a.ms)}`));
+    if (o.unknownMs >= 60000) did.push(h('span', { class: 'did unknown' }, `not logged ${duration(o.unknownMs)}`));
+    return h(
+      'li',
+      { class: 'pva' },
+      h('div', { class: 'pva-top' },
+        h('span', { class: 'time' }, span(b.start, b.end)),
+        h('span', { class: 'grow', dir: 'auto' }, h('strong', {}, b.label), b.category ? h('span', { class: 'time' }, ` · ${planCategoryName(b.category)}`) : null),
+        h('span', { class: `badge ${tone}` }, word),
+      ),
+      o.elapsedMs
+        ? h('div', { class: 'pva-bar', title: `${duration(o.keptMs)} of ${duration(blockMs)} as planned` },
+            h('b', { class: 'kept', style: { width: `${(o.keptMs / blockMs) * 100}%`, background: 'var(--good)' } }),
+            h('b', { class: 'other', style: { width: `${((o.elapsedMs - o.keptMs) / blockMs) * 100}%` } }))
+        : null,
+      did.length ? h('div', { class: 'pva-did' }, h('span', { class: 'time' }, 'Did: '), did) : null,
+    );
+  });
+  const editor = editable ? h('div', { class: 'pva-edit', hidden: true }, planEditor(day.date, day.plan, refresh, day.entryCategories, { title: 'Change the plan', copyFrom })) : null;
+  return card(
+    title,
+    summary,
+    planStrip(day.date, day.plan, pc.blocks),
+    h('ul', { class: 'list' }, items),
+    editor
+      ? [h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onclick: () => (editor.hidden = !editor.hidden) }, 'Change the plan')), editor]
+      : null,
+  );
+}
+
 // ------------------------------------------------------------------ pages
 
 async function todayPage(date) {
   const key = date ?? today();
-  const [day, { projects }] = await Promise.all([api(`/day?date=${key}`), api(`/projects?date=${key}`)]);
+  const [day, { projects }, before] = await Promise.all([api(`/day?date=${key}`), api(`/projects?date=${key}`), api(`/plan?date=${shiftDay(key, -1)}`)]);
   const refresh = () => render();
   const isToday = key === today();
+  const copyFrom = { day: before.day, count: before.blocks.length, label: "yesterday's plan" };
   setTopnav(key, '#today');
   const head = h(
     'div',
@@ -974,6 +1206,11 @@ async function todayPage(date) {
       h(
         'div',
         { class: 'stack' },
+        day.plan.length
+          ? planVsActualCard(day, refresh, { title: isToday ? 'Your plan so far' : 'Plan vs what happened', editable: key >= today(), copyFrom })
+          : key >= today()
+            ? planEditor(key, [], refresh, day.entryCategories, { title: isToday ? 'Plan today' : 'Plan this day', copyFrom })
+            : null,
         moodSummaryCard(day, refresh),
         goalsCard(key, day.goals, refresh, { title: isToday ? "Today's goals" : 'Goals', review: true, allowAdd: key >= today() }),
         projectsGlanceCard(key, projects),
@@ -989,7 +1226,10 @@ async function todayPage(date) {
 
 async function eveningPage(date) {
   const key = date ?? today();
-  const [day, { projects }] = await Promise.all([api(`/day?date=${key}`), api(`/projects?date=${key}`)]);
+  const next = shiftDay(key, 1);
+  // Planning the next day: tonight for tomorrow, or this morning for today if last night's log was skipped.
+  const planNext = next >= today();
+  const [day, { projects }, nextPlan] = await Promise.all([api(`/day?date=${key}`), api(`/projects?date=${key}`), planNext ? api(`/plan?date=${next}`) : null]);
   const refresh = () => render();
   const done = day.tasks.filter((t) => t.doneAt !== null).length;
   const activeProjects = projects.filter((p) => p.status === 'active');
@@ -1006,6 +1246,8 @@ async function eveningPage(date) {
         day.tasks.length ? ` You finished ${done} of ${day.tasks.length} tasks.` : '',
         activeProjects.length ? ` Say what you did on your ${activeProjects.length === 1 ? 'project' : `${activeProjects.length} projects`}.` : '',
         day.gaps.length ? ` ${day.gaps.length} stretch${day.gaps.length === 1 ? '' : 'es'} (${duration(day.gapMs)}) aren't accounted for yet: tell رقيب what you were doing.` : ' Every stretch of the day is accounted for.',
+        day.planComparison.share !== null ? ` ${Math.round(day.planComparison.share * 100)}% of the planned time went as planned.` : '',
+        planNext ? (nextPlan.blocks.length ? ` ${next === today() ? 'Today' : 'Tomorrow'} has ${nextPlan.blocks.length} block${nextPlan.blocks.length === 1 ? '' : 's'} planned.` : ` Then plan ${next === today() ? 'today' : 'tomorrow'}.`) : '',
       ),
     ),
     h(
@@ -1015,6 +1257,7 @@ async function eveningPage(date) {
         'div',
         { class: 'stack' },
         checkinCard(key, 'evening', day.checkins, refresh, { withNote: true, notePrompt: 'What affected your day, good or bad? (optional)' }),
+        day.plan.length ? planVsActualCard(day, refresh, { title: 'Your plan vs what happened' }) : null,
         gapsCard(day, refresh, { title: 'Fill in the gaps' }),
         entriesCard(day, refresh),
       ),
@@ -1028,6 +1271,14 @@ async function eveningPage(date) {
       ),
     ),
     h('div', { class: 'grid', style: { marginTop: '16px' } }, timelineCard(day)),
+    planNext
+      ? h('div', { class: 'grid', style: { marginTop: '16px' } },
+          planEditor(next, nextPlan.blocks, refresh, day.entryCategories, {
+            title: next === today() ? 'Plan today' : `Plan tomorrow, ${longDate(next)}`,
+            note: nextPlan.blocks.length ? undefined : 'A few minutes now, so the morning starts with a plan',
+            copyFrom: { day: key, count: day.plan.length, label: next === today() ? "yesterday's plan" : "today's plan" },
+          }))
+      : null,
     h(
       'div',
       { class: 'footer-actions' },
@@ -1040,7 +1291,12 @@ async function eveningPage(date) {
 async function morningPage() {
   const key = today();
   const yesterday = shiftDay(key, -1);
-  const [day, past, { projects }] = await Promise.all([api(`/day?date=${key}`), api(`/day?date=${yesterday}`), api(`/projects?date=${key}`)]);
+  const [day, past, { projects }, { projects: pastProjects }] = await Promise.all([
+    api(`/day?date=${key}`),
+    api(`/day?date=${yesterday}`),
+    api(`/projects?date=${key}`),
+    api(`/projects?date=${yesterday}`),
+  ]);
   const refresh = () => render();
   const unfinished = past.tasks.filter((t) => t.doneAt === null && !day.tasks.some((n) => n.text === t.text));
   const hour = new Date().getHours();
@@ -1059,6 +1315,9 @@ async function morningPage() {
       stat('Focused', duration(past.focusMs)),
       stat('Tasks done', past.tasks.length ? `${pastDone}/${past.tasks.length}` : '—'),
       past.goals.length ? stat('Goals met', `${past.goals.filter((g) => g.result === 'met').length}/${past.goals.length}`) : null,
+      past.planComparison.share !== null
+        ? stat('Plan kept', `${Math.round(past.planComparison.share * 100)}%`, `${past.planComparison.kept} of ${past.planComparison.blocks.length} block${past.planComparison.blocks.length === 1 ? '' : 's'} kept`)
+        : null,
       (() => {
         const moods = past.checkins.map((c) => c.mood).filter(Boolean);
         return moods.length ? stat('Mood', ratingText(MOODS, moods.reduce((a, b) => a + b, 0) / moods.length)) : stat('Background sound', duration(r.multitasking.listeningMs));
@@ -1104,6 +1363,31 @@ async function morningPage() {
       )
     : null;
 
+  // What last night's evening log would have asked and nobody answered: the PC was off
+  // at 22:00, or you only came back too late. Asked here instead, about yesterday.
+  const noEvening = !past.checkins.some((c) => c.part === 'evening');
+  const openGoals = past.goals.filter((g) => g.result === null);
+  const openProjects = (pastProjects ?? []).filter((p) => p.status === 'active' && !answeredToday(p));
+  const finishYesterday =
+    noEvening || openGoals.length || openProjects.length
+      ? h(
+          'div',
+          { style: { marginBottom: '16px' } },
+          h('div', { class: 'callout', style: { marginBottom: '12px' } }, `Last night's log is still open. A minute on ${longDate(yesterday)} while you remember it:`),
+          h(
+            'div',
+            { class: 'grid cols-2' },
+            h(
+              'div',
+              { class: 'stack' },
+              noEvening ? checkinCard(yesterday, 'evening', past.checkins, refresh, { title: 'How was yesterday?', withNote: true, notePrompt: 'What affected it, good or bad? (optional)' }) : null,
+              openGoals.length ? goalsCard(yesterday, past.goals, refresh, { title: "How did yesterday's goals go?", review: true, allowAdd: false }) : null,
+            ),
+            h('div', { class: 'stack' }, openProjects.length ? eveningProjectsCard(yesterday, openProjects) : null),
+          ),
+        )
+      : null;
+
   setTopnav(null);
   return [
     h(
@@ -1112,6 +1396,7 @@ async function morningPage() {
       h('h1', {}, greeting),
       h('p', {}, `${longDate(key)}. Here's how yesterday went, and room to plan today.`),
     ),
+    finishYesterday,
     new Date(parseDay(key)).getDay() === 1
       ? h('div', { class: 'callout', style: { marginBottom: '16px' } }, 'A new week. ', h('a', { href: `#week/${shiftDay(key, -7)}` }, 'Look back on last week'), ' before you plan this one.')
       : null,
@@ -1123,6 +1408,12 @@ async function morningPage() {
         'div',
         { class: 'stack' },
         checkinCard(key, 'morning', day.checkins, refresh),
+        planEditor(key, day.plan, refresh, day.entryCategories, {
+          title: 'Plan your day',
+          note: day.plan.length ? 'Your plan for today. Change anything that’s moved since you made it.' : 'What you’ll do today, and when',
+          copyFrom: { day: yesterday, count: past.plan.length, label: "yesterday's plan" },
+          outcomes: day.planComparison.blocks,
+        }),
         goalsCard(key, day.goals, refresh, { title: 'Your goals for today' }),
         projectsGlanceCard(key, projects, { title: 'Your projects', morning: true }),
         tasksCard(key, day.tasks, refresh, { title: "Today's tasks", note: 'What would make today a good day?' }),
@@ -1225,6 +1516,7 @@ async function weekPage(date) {
     stat('Mood', t.mood ? `${rating(t.mood)} ${MOODS[Math.round(t.mood.value) - 1][0]}` : '—', [t.mood ? `${moodWord(t.mood.value)} on average ` : 'no check-ins yet', delta(t.mood, p.mood, { format: (v) => Math.abs(v).toFixed(1), min: 0.2 })]),
     stat('Energy', t.energy ? `${rating(t.energy)} / 5` : '—', delta(t.energy, p.energy, { format: (v) => Math.abs(v).toFixed(1), min: 0.2 })),
     stat('Goals met', t.goalsTotal ? `${t.goalsMet}/${t.goalsTotal}` : '—', t.goalsPartly ? `${t.goalsPartly} partly` : null),
+    stat('On the phone a day', avg(t.phoneMs), t.phoneMs ? `${t.phoneMs.days} day${t.phoneMs.days === 1 ? '' : 's'} logged ` : 'log it in the evening'),
     stat('Tasks done', t.tasksTotal ? `${t.tasksDone}/${t.tasksTotal}` : '—', t.tasksTotal ? `${Math.round((t.tasksDone / t.tasksTotal) * 100)}%` : null),
   );
 
@@ -1238,7 +1530,7 @@ async function weekPage(date) {
       h(
         'table',
         { class: 'week-table' },
-        h('thead', {}, h('tr', {}, ['Day', 'Sleep', 'Mood', 'Energy', 'Focused', 'Distractions', 'On the PC', 'Goals', 'Tasks', 'Unlogged'].map((c) => h('th', {}, c)))),
+        h('thead', {}, h('tr', {}, ['Day', 'Sleep', 'Mood', 'Energy', 'Focused', 'Distractions', 'Phone', 'On the PC', 'Goals', 'Tasks', 'Unlogged'].map((c) => h('th', {}, c)))),
         h(
           'tbody',
           {},
@@ -1252,6 +1544,7 @@ async function weekPage(date) {
               h('td', {}, d.energy ? `${d.energy.toFixed(d.energy % 1 ? 1 : 0)}/5` : '—'),
               h('td', {}, h('span', { class: 'minibar', style: { width: `${Math.round((d.focusMs / maxFocus) * 60)}px` } }), duration(d.focusMs)),
               h('td', {}, duration(d.distractionMs)),
+              h('td', {}, d.phoneMs ? duration(d.phoneMs) : '—'),
               h('td', {}, duration(d.activeMs)),
               h('td', {}, d.goalsTotal ? `${d.goalsMet}/${d.goalsTotal}` : '—'),
               h('td', {}, d.tasksTotal ? `${d.tasksDone}/${d.tasksTotal}` : '—'),
@@ -1328,10 +1621,57 @@ async function weekPage(date) {
         sleepBox,
         card('Where the PC time went', null, bars(week.categories.map((c) => ({ name: c.category, ms: c.ms })), (i) => colorOf(i.name))),
         card('Biggest distractions', null, bars(week.distractions, () => colorOf('video'))),
+        uncategorisedCard(week),
       ),
     ),
     weekProjectsCard(week),
   ];
+}
+
+/**
+ * Sites and apps that no category rule matched, so they sit in "other" and count as
+ * neither focus nor distraction. Picking a category adds them to categories.json,
+ * which also re-sorts every past day.
+ */
+function uncategorisedCard(week) {
+  const items = week.uncategorised ?? [];
+  if (!items.length) return null;
+  return card(
+    'Not in any category',
+    'Counted as neither focus nor distraction',
+    h(
+      'ul',
+      { class: 'list' },
+      items.map((item) => {
+        const pick = h(
+          'select',
+          { 'aria-label': `Category for ${item.name}` },
+          h('option', { value: '' }, 'Put in…'),
+          week.screenCategories.map((c) => h('option', { value: c }, c)),
+        );
+        pick.addEventListener(
+          'change',
+          oneAtATime(async () => {
+            if (!pick.value) return;
+            try {
+              await api('/categories', { method: 'POST', body: { category: pick.value, kind: item.kind, value: item.name } });
+              say(`${item.name} now counts as ${pick.value}, on every day`);
+              await render();
+            } catch (error) {
+              handle(error);
+            }
+          }),
+        );
+        return h(
+          'li',
+          {},
+          h('span', { class: 'grow', title: item.kind === 'domain' ? 'Website' : 'App' }, item.name),
+          h('span', { class: 'time' }, duration(item.ms)),
+          pick,
+        );
+      }),
+    ),
+  );
 }
 
 /** What each project did that week: what moved, days worked, targets met. */
@@ -1350,6 +1690,7 @@ function weekProjectsCard(week) {
         week.projects.map((p) => {
           const color = projectColor(p);
           const bits = [`${p.daysWorked} day${p.daysWorked === 1 ? '' : 's'} worked`];
+          if (p.pcMs) bits.push(`${duration(p.pcMs)} on the PC`);
           if (p.targetDays) bits.push(`targets met ${p.targetsMet} of ${p.targetDays}`);
           if (p.daysSkipped) bits.push(`${p.daysSkipped} “nothing today”`);
           return h(
@@ -1449,7 +1790,7 @@ function reminderForm(existing, onDone) {
         }, name),
       ),
     );
-    const save = async () => {
+    const save = oneAtATime(async () => {
       if (!state.text.trim()) {
         say('Write what to remind you of', true);
         return;
@@ -1465,7 +1806,7 @@ function reminderForm(existing, onDone) {
       } catch (error) {
         handle(error);
       }
-    };
+    });
     box.append(
       h('label', { class: 'field' }, h('span', {}, 'Remind me to'), text),
       h('div', { class: 'field' }, h('span', {}, 'When'), kind, detail),
@@ -1602,10 +1943,15 @@ async function settingsPage() {
       card(
         'Evening log',
         null,
-        h('p', { class: 'hint', style: { marginBottom: '12px' } }, "A notification with your day so far, asking you to fill in the gaps. If the PC is off at that time, it comes the next time you use it that evening; yesterday's gaps also show on the morning page."),
+        h('p', { class: 'hint', style: { marginBottom: '12px' } }, "A notification with your day so far, asking you to fill in the gaps. If the PC is off at that time, it comes the next time you use it that evening, until the cut-off. After that, the morning page asks about yesterday instead: how it went, your goals, and your projects."),
         h('div', { class: 'row' },
           toggle(s.evening.enabled, 'Send the evening log at', (v) => save({ evening: { enabled: v } })),
           time(s.evening.at, (v) => save({ evening: { at: v } }), 'Evening time'),
+        ),
+        h('div', { class: 'row', style: { marginTop: '12px' } },
+          h('span', {}, 'Not after'),
+          time(s.evening.lateAfter ?? '23:00', (v) => save({ evening: { lateAfter: v } }), 'Evening cut-off'),
+          h('span', { class: 'hint' }, 'later than this, it waits for the morning'),
         ),
         h('div', { class: 'row', style: { marginTop: '12px' } },
           h('button', { class: 'btn', onclick: async () => { try { await api('/evening/test', { method: 'POST' }); say('Sent: look for the notification'); } catch (error) { handle(error); } } }, 'Send it now'),
@@ -1789,7 +2135,7 @@ function projectCard(p, key) {
     h(
       'p',
       { class: 'pc-meta' },
-      [p.due ? dueText(p.due, key) : null, workedText(p, key), p.status === 'active' ? (answeredToday(p) ? 'today answered' : 'today not answered yet') : null].filter(Boolean).join(' · '),
+      [p.due ? dueText(p.due, key) : null, workedText(p, key), p.match?.length ? `${duration(p.pcMs ?? 0)} on the PC` : null, p.status === 'active' ? (answeredToday(p) ? 'today answered' : 'today not answered yet') : null].filter(Boolean).join(' · '),
     ),
     p.neglectedDays !== null ? h('p', { class: 'pc-warn' }, `Not touched in ${p.neglectedDays} days`) : null,
     p.subtasks.length
@@ -1825,12 +2171,12 @@ function newProjectForm(onCancel) {
   const name = h('input', { type: 'text', dir: 'auto', placeholder: 'Anatomy exam, side project, a book…', 'aria-label': 'Project name', maxlength: 100 });
   const due = h('input', { type: 'date', 'aria-label': 'Deadline' });
   let color = PROJECT_COLORS[0];
-  const save = () =>
+  const save = oneAtATime(() =>
     act(async () => {
       if (!name.value.trim()) throw new Error('Give the project a name');
       const made = await api('/projects', { method: 'POST', body: { name: name.value, due: due.value || null, color } });
       location.hash = `#projects/${made.id}`;
-    });
+    }));
   name.addEventListener('keydown', (e) => e.key === 'Enter' && save());
   setTimeout(() => name.focus(), 0);
   return card(
@@ -2002,14 +2348,14 @@ function addSubtaskForm(p) {
   const total = h('input', { type: 'number', min: 1, placeholder: 'How many', 'aria-label': 'How many (leave empty for a checkbox)', style: { width: '110px' } });
   const unit = h('input', { type: 'text', placeholder: 'slides', 'aria-label': 'Unit', style: { width: '110px' }, maxlength: 30 });
   const due = h('input', { type: 'date', 'aria-label': 'Due date (optional)' });
-  const add = () =>
+  const add = oneAtATime(() =>
     act(async () => {
       if (!title.value.trim()) throw new Error('Give the sub-task a title');
       await api(`/projects/${p.id}/subtasks`, {
         method: 'POST',
         body: { title: title.value, total: total.value ? Number(total.value) : null, unit: total.value ? unit.value || null : null, due: due.value || null },
       });
-    });
+    }));
   for (const input of [title, total, unit]) input.addEventListener('keydown', (e) => e.key === 'Enter' && add());
   return h(
     'div',
@@ -2131,6 +2477,25 @@ async function historyTab(p) {
   );
 }
 
+/** The words that make PC time count toward a project, with today's total. */
+function matchCard(p, patch) {
+  const input = h('input', {
+    type: 'text',
+    dir: 'auto',
+    value: (p.match ?? []).join(', '),
+    placeholder: 'AWS Certified, aws.amazon.com, FoxitPDFReader',
+    'aria-label': 'Words that count toward this project',
+  });
+  input.addEventListener('change', () => patch({ match: input.value }));
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && input.blur());
+  return card(
+    'Counts automatically',
+    p.match?.length ? `${duration(p.pcMs ?? 0)} on the PC today` : 'Off',
+    h('p', { class: 'hint' }, 'PC time counts toward this project when a window title contains one of these, or the site, app, or editor workspace is one. Separate them with commas. Idle time never counts.'),
+    h('div', { class: 'add-row' }, input),
+  );
+}
+
 async function projectPage(id) {
   const key = today();
   const p = await api(`/projects/${id}?date=${key}`);
@@ -2182,7 +2547,7 @@ async function projectPage(id) {
         p.subtasks.length ? h('ul', { class: 'list subs' }, p.subtasks.map((s) => subtaskRow(s, p, key))) : h('p', { class: 'empty' }, 'No sub-tasks yet. Add the first one below.'),
         addSubtaskForm(p),
       ),
-      h('div', { class: 'stack' }, todayNoteCard(p, key)),
+      h('div', { class: 'stack' }, todayNoteCard(p, key), matchCard(p, patch)),
     );
 
   return [
@@ -2326,6 +2691,8 @@ function eveningProjectBlock(project, key, onChange) {
     { class: 'ep-block' },
     h('div', { class: 'ep-head' }, h('i', { class: 'dot', style: { background: color } }), h('a', { href: `#projects/${p.id}`, dir: 'auto', class: 'grow' }, p.name), status, bar, percent),
     p.neglectedDays !== null && !answeredToday(p) ? h('p', { class: 'pc-warn' }, `Not touched in ${p.neglectedDays} days`) : null,
+    // The PC already knows how long you spent on it; you only say how far you got.
+    project.pcMs ? h('p', { class: 'hint' }, `${duration(project.pcMs)} on it at the PC today. How far did you get?`) : null,
     rows.length ? h('div', { class: 'ep-subs' }, rows) : null,
     h('div', { class: 'ep-note' }, noteInput, skip),
   );

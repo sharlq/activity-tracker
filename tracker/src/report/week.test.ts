@@ -13,6 +13,7 @@ function figures(d: number, over: Partial<DayFigures> = {}): DayFigures {
     activeMs: 4 * HOUR,
     focusMs: 2 * HOUR,
     distractionMs: HOUR,
+    phoneMs: 0,
     sleep: { night: null, naps: [], napMs: 0, totalMs: 0 },
     mood: null,
     energy: null,
@@ -76,5 +77,12 @@ describe('weekly review', () => {
     const more = observations(days, weekTotals(days, [9, 10, 11, 12].map(start)));
     assert.ok(more.includes('After nights under 6h30m you focused 1h00m a day on average, against 3h00m after longer nights.'));
     assert.ok(more.includes('You went to bed after 01:00 on 2 nights.'));
+  });
+
+  it('averages phone time over the days it was logged, and sets it against focus', () => {
+    const days = [figures(9, { phoneMs: 7 * HOUR }), figures(10, { phoneMs: 5 * HOUR }), figures(11)];
+    const t = weekTotals(days, [9, 10, 11].map(start));
+    assert.deepEqual(t.phoneMs, { value: 6 * HOUR, days: 2 });
+    assert.ok(observations(days, t).includes('You logged 6h00m a day on your phone (2 days logged), against 2h00m focused at the PC.'));
   });
 });

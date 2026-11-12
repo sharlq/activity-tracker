@@ -132,9 +132,18 @@ describe('morning and evening', () => {
   it('sends the evening log at the set time, or the first time after it the PC is in use', () => {
     assert.equal(eveningDue(DEFAULT_SETTINGS, none, at(21, 59), true), false);
     assert.equal(eveningDue(DEFAULT_SETTINGS, none, at(22), true), true);
-    assert.equal(eveningDue(DEFAULT_SETTINGS, none, at(23, 40), true), true);
-    assert.equal(eveningDue(DEFAULT_SETTINGS, { ...none, eveningShown: '2026-11-10' }, at(23), true), false);
-    assert.equal(eveningDue({ ...DEFAULT_SETTINGS, evening: { enabled: false, at: '22:00' } }, none, at(23), true), false);
+    assert.equal(eveningDue(DEFAULT_SETTINGS, none, at(22, 59), true), true);
+    assert.equal(eveningDue(DEFAULT_SETTINGS, { ...none, eveningShown: '2026-11-10' }, at(22, 30), true), false);
+    assert.equal(eveningDue({ ...DEFAULT_SETTINGS, evening: { enabled: false, at: '22:00', lateAfter: '23:00' } }, none, at(22, 30), true), false);
+  });
+
+  it('leaves the evening log for the morning page when you only get to the PC late', () => {
+    // On 11 Nov the PC was off from 17:00 and the 22:00 log came at 23:31.
+    assert.equal(eveningDue(DEFAULT_SETTINGS, none, at(23), true), false);
+    assert.equal(eveningDue(DEFAULT_SETTINGS, none, at(23, 31), true), false);
+    // A cut-off at or before the evening time switches it off: the old behaviour.
+    assert.equal(eveningDue({ ...DEFAULT_SETTINGS, evening: { enabled: true, at: '22:00', lateAfter: '22:00' } }, none, at(23, 40), true), true);
+    assert.equal(mergeSettings(DEFAULT_SETTINGS, { evening: { lateAfter: '23:30' } }).evening.lateAfter, '23:30');
   });
 
   it('merges settings from the UI, keeping what is not mentioned', () => {

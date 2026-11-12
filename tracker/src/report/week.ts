@@ -13,7 +13,10 @@ export interface DayFigures {
   past: boolean;
   activeMs: number;
   focusMs: number;
+  /** PC distraction plus distraction you logged off the PC (the phone). */
   distractionMs: number;
+  /** Phone time you logged. 0 on days you didn't log any. */
+  phoneMs: number;
   sleep: Sleep;
   /** The day's check-ins averaged, 1 to 5, or null. */
   mood: number | null;
@@ -38,6 +41,8 @@ export interface WeekTotals {
   activeMs: Average | null;
   focusMs: Average | null;
   distractionMs: Average | null;
+  /** Over the days you logged phone time. */
+  phoneMs: Average | null;
   sleepMs: Average | null;
   mood: Average | null;
   energy: Average | null;
@@ -77,6 +82,8 @@ export function weekTotals(days: readonly DayFigures[], dayStarts: readonly numb
     activeMs: average(used.map((d) => d.activeMs)),
     focusMs: average(used.map((d) => d.focusMs)),
     distractionMs: average(used.map((d) => d.distractionMs)),
+    // Only days you logged the phone: a day without an answer isn't a day without the phone.
+    phoneMs: average(past.filter((d) => d.phoneMs > 0).map((d) => d.phoneMs)),
     sleepMs: average(days.filter((d) => d.sleep.night !== null).map((d) => d.sleep.totalMs)),
     mood: average(past.flatMap((d) => (d.mood === null ? [] : [d.mood]))),
     energy: average(past.flatMap((d) => (d.energy === null ? [] : [d.energy]))),
@@ -130,6 +137,13 @@ export function observations(days: readonly DayFigures[], totals: WeekTotals): s
     if (ms > peakMs) [peak, peakMs] = [h, ms];
   }
   if (peak >= 0 && peakMs >= HOUR) out.push(`You focused most between ${pad(peak)}:00 and ${pad(peak + 2)}:00 (${duration(peakMs)} over the week).`);
+
+  // The phone, set against focus: the PC alone can't see it.
+  if (totals.phoneMs && totals.phoneMs.value >= 30 * MINUTE) {
+    const days = totals.phoneMs.days;
+    const versus = totals.focusMs ? `, against ${duration(totals.focusMs.value)} focused at the PC` : '';
+    out.push(`You logged ${duration(totals.phoneMs.value)} a day on your phone (${days} day${days === 1 ? '' : 's'} logged)${versus}.`);
+  }
 
   // Sleep and the next day's focus.
   const slept = used.filter((d) => d.sleep.night !== null);

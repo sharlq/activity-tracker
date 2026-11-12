@@ -13,6 +13,7 @@ import { AudioRecorder, audioSources, LoudnessMemory, SpanRecorder } from './aud
 import type { ScreenSource, ScreenWindow } from './screens.ts';
 import { rememberVisibleTabs, screenSources } from './screens.ts';
 import { createApi, listen } from './api.ts';
+import { backupFolder, backUp } from './backup.ts';
 import type { BrowserTab } from './browser.ts';
 import { domainOf, rememberTab } from './browser.ts';
 import type { Config } from './config.ts';
@@ -32,6 +33,7 @@ import type { Page } from './launch.ts';
 import { BACK_WINDOW_SIZE, loginUrl } from './launch.ts';
 import type { Notifier, Toast } from './notify.ts';
 import type { BackMode, ReturnState } from './planner.ts';
+import type { PlanComparison } from './dayPlan.ts';
 import { dayKey, detectReturn, dueSlot, eveningDue, morningDue, projectReminderDue } from './planner.ts';
 import type { ProjectOverview } from './projects.ts';
 import { unanswered } from './projects.ts';
@@ -48,6 +50,8 @@ const AUDIO_POLL_MS = 1000;
 const PROCESS_INFO_TTL_MS = 15_000;
 /** You count as at the PC for the morning page and evening log if you used it this recently. */
 const PRESENT_MS = 60_000;
+/** Work on the main loop taking this long is logged: it delays the next tick. */
+const SLOW_MS = 2_000;
 
 export interface ScreensProbe {
   screenWindows(): ScreenWindow[];
@@ -90,6 +94,18 @@ export function eveningProjectsLine(projects: ProjectOverview[]): string | null 
   if (open.length === 0) return null;
   return `What did you do on ${names(open)}?`;
 }
+
+/** The evening line about the plan: how today held up, and whether tomorrow has one yet. */
+export function planLine(today: PlanComparison, tomorrowBlocks: number): string {
+  const held = today.blocks.length && today.share !== null ? `Plan kept ${Math.round(today.share * 100)}% · ` : '';
+  return `${held}${tomorrowBlocks ? `Tomorrow: ${tomorrowBlocks} block${tomorrowBlocks === 1 ? '' : 's'} planned` : 'Plan tomorrow before bed'}`;
+}
+
+const shiftDay = (ms: number, days: number) => {
+  const d = new Date(ms);
+  d.setDate(d.getDate() + days);
+  return d.getTime();
+};
 
 /** The daily project nudge, for days you skip the evening log. Null when every project is answered. */
 export function projectReminderToast(projects: ProjectOverview[], url: string | null): Toast | null {
@@ -135,6 +151,8 @@ export interface ServiceOptions {
   audio?: AudioProbe;
   /** Reads what's on top of each screen. Without it, other screens aren't recorded. */
   screens?: ScreensProbe;
+  /** Makes a copy of the database each day (see backup.ts). Off unless asked for. */
+  backups?: boolean;
 }
 
 export function dbPath(): string {
@@ -228,7 +246,10 @@ export function startService(
     if (!options.audio) return;
     try {
       if (!readSettings(journal).audio.enabled) return;
-      loudness.hear(options.audio.readSessions(), Date.now());
+      const started = performance.now();
+      const sessions = options.audio.readSessions();
+      noteSlow('reading the sound meters', Math.round(performance.now() - started), Date.now());
+      loudness.hear(sessions, Date.now());
       if (audioFailing) logger.info('Audio: recovered');
       audioFailing = false;
     } catch (error) {
@@ -282,6 +303,7 @@ export function startService(
       `${duration(day.activeMs)} active on the PC · ${duration(day.focusMs)} focused${day.tasks.length ? ` · tasks ${done}/${day.tasks.length}` : ''}`,
       day.gaps.length ? `${day.gaps.length} gap${day.gaps.length === 1 ? '' : 's'} (${duration(day.gapMs)}) to fill in` : 'No gaps left to fill in',
       ...(projectsLine ? [projectsLine] : []),
+      planLine(day.planComparison, journal.planBlocks(dayKey(shiftDay(at, 1))).length),
     ];
     await show(
       {
@@ -397,6 +419,51 @@ export function startService(
     }
   };
 
+  /** What the slowest recent work was, so a stall's log line can name its likely cause. */
+  let slowest: { what: string; ms: number; at: number } | null = null;
+  const noteSlow = (what: string, ms: number, at: number): void => {
+    if (ms >= SLOW_MS) logger.warn(`Slow: ${what} took ${ms}ms`);
+    if (!slowest || ms > slowest.ms || at - slowest.at > 60_000) slowest = { what, ms, at };
+  };
+  const timed = <T>(what: string, run: () => T): T => {
+    const started = performance.now();
+    try {
+      return run();
+    } finally {
+      noteSlow(what, Math.round(performance.now() - started), Date.now());
+    }
+  };
+
+  // One copy of the database a day, taken on the first tick of the day.
+  let backedUpDay: string | null = null;
+  let backingUp = false;
+  const backUpDaily = (at: number): void => {
+    const day = dayKey(at);
+    if (backingUp || backedUpDay === day || options.backups !== true) return;
+    backingUp = true;
+    backUp(dbPath(), backupFolder(config), day, config.backup.keep).then(
+      (file) => {
+        backedUpDay = day;
+        if (file) logger.info(`Backed up the database to ${file}`);
+      },
+      (error: unknown) => {
+        backedUpDay = day; // Try again tomorrow (or after a restart), not every tick.
+        logger.error('Could not back up the database', error);
+      },
+    ).finally(() => {
+      backingUp = false;
+    });
+  };
+
+  const readAwake = (): number | undefined => {
+    try {
+      const value = probe.awakeMs?.();
+      return value !== undefined && Number.isFinite(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const tick = (): void => {
     try {
       const at = Date.now();
@@ -414,16 +481,22 @@ export function startService(
       }
 
       const otherActivityAt = Math.max(gamepads.lastActivityAt ?? -Infinity, lastGameAt ?? -Infinity);
-      const sampled = sample(probe, config, at, otherActivityAt, recentTabs, recentEditors);
-      const { lastInputAt, locked, inGame } = sampled;
+      const sampled = timed('reading the window in front', () => sample(probe, config, at, otherActivityAt, recentTabs, recentEditors));
+      const { lastInputAt, locked, inGame, talking } = sampled;
       const activity = until === null ? sampled.activity : null;
-      const { ops, gapMs } = merger.tick({ at, activity, lastInputAt });
-      store.apply(ops);
-      if (inGame) lastGameAt = at;
-      recordAudio(at, !locked && until === null);
-      recordScreens(at, !locked && until === null);
-      plan(at, locked, lastInputAt, gapMs !== null, until !== null);
+      const { ops, gapMs, stallMs } = merger.tick({ at, activity, lastInputAt, awakeAt: readAwake() });
+      timed('saving the tick', () => store.apply(ops));
+      // A game or a call is activity the keyboard can't see; idle later isn't backdated past it.
+      if (inGame || talking) lastGameAt = at;
+      timed('recording sound', () => recordAudio(at, !locked && until === null));
+      timed('recording other screens', () => recordScreens(at, !locked && until === null));
+      timed('reminders and pages', () => plan(at, locked, lastInputAt, gapMs !== null, until !== null));
+      backUpDaily(at);
 
+      if (stallMs !== undefined) {
+        const cause = slowest && at - slowest.at < stallMs + 10_000 ? `; slowest recent work: ${slowest.what} (${slowest.ms}ms)` : '';
+        logger.warn(`Stalled ${Math.round(stallMs / 1000)}s while the PC stayed awake; recorded across it${cause}`);
+      }
       if (gapMs !== null) logger.info(`Gap of ${Math.round(gapMs / 1000)}s between ticks; not bridged`);
       if (locked !== wasLocked) logger.info(locked ? 'Session locked' : 'Session unlocked');
       if (failing) logger.info('Recovered');

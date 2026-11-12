@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AudioEvent } from '../journal.ts';
 import { complement, findGaps, union } from './gaps.ts';
-import { audioBlocks, isPhoneEntry, multitasking, phoneMultitasking, playingTitle } from './multitask.ts';
+import { audioBlocks, isPhoneEntry, loggedDistraction, multitasking, phoneMultitasking, playingTitle } from './multitask.ts';
 import type { Segment } from './report.ts';
 
 const MIN = 60_000;
@@ -113,6 +113,21 @@ describe('playingTitle', () => {
 
 describe('phone multitasking', () => {
   const entry = (id: number, start: number, end: number, label: string, category: string | null = 'social media') => ({ id, start: start * MIN, end: end * MIN, label, category });
+
+  it('adds logged distraction to what the PC saw, counting each moment once', () => {
+    const segments = [seg(0, 30, 'video', 'youtube.com'), seg(30, 60, 'work', 'claude')];
+    const entries = [
+      entry(1, 20, 50, 'Phone: Instagram/TikTok'), // 10 min of it overlaps YouTube on the PC
+      entry(2, 40, 50, 'On my phone'), // inside entry 1: counted once
+      entry(3, 70, 80, 'Phone: productivity apps', 'other'), // phone, but not a distraction
+      entry(4, 90, 100, 'Meal', 'meal'),
+    ];
+    const l = loggedDistraction(entries, segments, ['video', 'social media'], 0, 24 * 60 * MIN);
+    assert.equal(l.ms, 20 * MIN);
+    assert.equal(l.phoneMs, 40 * MIN);
+    assert.equal(l.phoneDistractionMs, 30 * MIN);
+    assert.deepEqual(l.byLabel[0], { name: 'Phone: Instagram/TikTok', ms: 30 * MIN });
+  });
 
   it('knows phone entries by their label', () => {
     assert.ok(isPhoneEntry({ label: 'On my phone' }));
