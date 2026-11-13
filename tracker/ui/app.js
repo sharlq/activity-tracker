@@ -837,7 +837,7 @@ function checkinCard(dayKeyValue, part, checkins, refresh, { title, note, withNo
     }
   };
   const noteBox = withNote
-    ? h('textarea', { class: 'checkin-note', placeholder: notePrompt ?? 'Anything that affected how you felt? (optional)', 'aria-label': 'Note' }, current.note ?? '')
+    ? h('textarea', { class: 'checkin-note', placeholder: notePrompt ?? 'Anything that affected how you felt? (optional)', 'aria-label': 'Note', dir: 'auto' }, current.note ?? '')
     : null;
   return card(
     title ?? (part === 'morning' ? 'How are you feeling?' : 'How did you feel today?'),
@@ -860,7 +860,8 @@ function moodSummaryCard(day, refresh) {
     'Mood and energy',
     null,
     h('div', { class: 'mini-checkins' }, line('Morning', morning), line('Evening', evening)),
-    evening?.note ? h('p', { class: 'hint', style: { marginTop: '8px' } }, `“${evening.note}”`) : null,
+    morning?.note ? h('p', { class: 'hint', style: { marginTop: '8px' }, dir: 'auto' }, `Morning: “${morning.note}”`) : null,
+    evening?.note ? h('p', { class: 'hint', style: { marginTop: '8px' }, dir: 'auto' }, `${morning?.note ? 'Evening: ' : ''}“${evening.note}”`) : null,
     !evening && day.date === today() ? h('p', { class: 'hint', style: { marginTop: '8px' } }, 'The evening log asks again. ', h('a', { href: '#evening' }, 'Check in now')) : null,
   );
 }
@@ -1368,25 +1369,16 @@ async function morningPage() {
   const noEvening = !past.checkins.some((c) => c.part === 'evening');
   const openGoals = past.goals.filter((g) => g.result === null);
   const openProjects = (pastProjects ?? []).filter((p) => p.status === 'active' && !answeredToday(p));
-  const finishYesterday =
-    noEvening || openGoals.length || openProjects.length
-      ? h(
-          'div',
-          { style: { marginBottom: '16px' } },
-          h('div', { class: 'callout', style: { marginBottom: '12px' } }, `Last night's log is still open. A minute on ${longDate(yesterday)} while you remember it:`),
-          h(
-            'div',
-            { class: 'grid cols-2' },
-            h(
-              'div',
-              { class: 'stack' },
-              noEvening ? checkinCard(yesterday, 'evening', past.checkins, refresh, { title: 'How was yesterday?', withNote: true, notePrompt: 'What affected it, good or bad? (optional)' }) : null,
-              openGoals.length ? goalsCard(yesterday, past.goals, refresh, { title: "How did yesterday's goals go?", review: true, allowAdd: false }) : null,
-            ),
-            h('div', { class: 'stack' }, openProjects.length ? eveningProjectsCard(yesterday, openProjects) : null),
-          ),
-        )
-      : null;
+  const yesterdayOpen = noEvening || openGoals.length || openProjects.length;
+  // These cards sit at the top of the left column with the rest, so a column never
+  // stands empty next to a long card.
+  const finishYesterday = yesterdayOpen
+    ? [
+        noEvening ? checkinCard(yesterday, 'evening', past.checkins, refresh, { title: 'How was yesterday?', withNote: true, notePrompt: 'What affected it, good or bad? (optional)' }) : null,
+        openGoals.length ? goalsCard(yesterday, past.goals, refresh, { title: "How did yesterday's goals go?", review: true, allowAdd: false }) : null,
+        openProjects.length ? eveningProjectsCard(yesterday, openProjects) : null,
+      ]
+    : [];
 
   setTopnav(null);
   return [
@@ -1396,18 +1388,23 @@ async function morningPage() {
       h('h1', {}, greeting),
       h('p', {}, `${longDate(key)}. Here's how yesterday went, and room to plan today.`),
     ),
-    finishYesterday,
+    yesterdayOpen
+      ? h('div', { class: 'callout', style: { marginBottom: '16px' } }, `Last night's log is still open. A minute on ${longDate(yesterday)} while you remember it (on the left):`)
+      : null,
     new Date(parseDay(key)).getDay() === 1
       ? h('div', { class: 'callout', style: { marginBottom: '16px' } }, 'A new week. ', h('a', { href: `#week/${shiftDay(key, -7)}` }, 'Look back on last week'), ' before you plan this one.')
       : null,
     h(
       'div',
       { class: 'grid cols-2' },
-      h('div', { class: 'stack' }, sleepCard(day, refresh), yesterdayCard),
+      h('div', { class: 'stack' }, ...finishYesterday, sleepCard(day, refresh), yesterdayCard),
       h(
         'div',
         { class: 'stack' },
-        checkinCard(key, 'morning', day.checkins, refresh),
+        checkinCard(key, 'morning', day.checkins, refresh, {
+          withNote: true,
+          notePrompt: "How's your mood this morning, and what's on your mind?",
+        }),
         planEditor(key, day.plan, refresh, day.entryCategories, {
           title: 'Plan your day',
           note: day.plan.length ? 'Your plan for today. Change anything that’s moved since you made it.' : 'What you’ll do today, and when',
