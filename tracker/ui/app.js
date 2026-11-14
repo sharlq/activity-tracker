@@ -91,6 +91,8 @@ const ICONS = {
   drop: '<path d="M12 3.5s6 6.3 6 10.5a6 6 0 0 1-12 0c0-4.2 6-10.5 6-10.5z"/>',
   arrowin: '<path d="M4.5 12h11M11.5 7.5l4.5 4.5-4.5 4.5M19.5 4.5v15"/>',
   sleep: '<path d="M18 14.8A7 7 0 1 1 9.2 6a5.6 5.6 0 0 0 8.8 8.8z"/><path d="M15 4h3.5L15 7.5h3.5"/>',
+  bed: '<path d="M3.5 18.5v-11M3.5 15.5h17v3M20.5 15.5v-3a2.5 2.5 0 0 0-2.5-2.5h-8v5.5"/><circle cx="7" cy="12" r="1.8"/>',
+  routine: '<path d="M10 3.5h4M12 3.5v2"/><circle cx="12" cy="13.5" r="7"/><path d="M12 10v3.5l2.5 1.5"/>',
   meal: '<path d="M7 3.5v7a2 2 0 0 0 2 2v8M7 3.5v4.5M11 3.5V8a2 2 0 0 1-2 2M16.5 20.5v-17c-1.8 1-3 3.3-3 6.5 0 2.6 1.2 3.5 3 3.5"/>',
   errand: '<path d="M13.5 4.5h4.5v15h-4.5M4.5 12h10M10.5 8l4 4-4 4"/>',
   exercise: '<path d="M6.5 8v8M17.5 8v8M3.5 10v4M20.5 10v4M6.5 12h11"/>',
@@ -99,6 +101,8 @@ const ICONS = {
   prayer: '<path d="M5.5 20.5h13M7.5 20.5V10.5a4.5 4.5 0 0 1 9 0v10"/><path d="M12 3.5v2"/>',
   rest: '<path d="M4 17.5h16M6 17.5V12a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5.5M4 20v-2.5M20 20v-2.5"/>',
   chores: '<path d="M14.5 3.5l-2 8M8 11.5h9l1.5 9h-12z"/>',
+  health: '<path d="M12 19.5s-7.5-4.4-7.5-10a4.2 4.2 0 0 1 7.5-2.6 4.2 4.2 0 0 1 7.5 2.6c0 5.6-7.5 10-7.5 10z"/><path d="M7.5 12h2.5l1.5-2.5 2 4 1.5-1.5h1.5"/>',
+  scale: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M9 9.5a4 4 0 0 1 6 0M12 9.5l1-1.5"/>',
   phone: '<rect x="7" y="3.5" width="10" height="17" rx="2.5"/><path d="M11 17.5h2"/>',
   music: '<path d="M9 18V6.5l10-2v11.5"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
 };
@@ -161,7 +165,7 @@ const swatch = (category) => h('i', { class: `dot${COLORS[category] ? '' : ' log
 
 /** Quick answers for a gap: the label to log, the category it goes under, and its icon. */
 const QUICK = [
-  ['Sleep', 'sleep', 'sleep'], ['Meal', 'meal', 'meal'], ['Out / errands', 'errand', 'errand'], ['Exercise', 'exercise', 'exercise'], ['Commute', 'commute', 'commute'],
+  ['Sleep', 'sleep', 'sleep'], ['In bed', 'in bed', 'bed'], ['Sleep routine', 'sleep routine', 'routine'], ['Meal', 'meal', 'meal'], ['Out / errands', 'errand', 'errand'], ['Exercise', 'exercise', 'exercise'], ['Commute', 'commute', 'commute'],
   ['With people', 'social', 'social'], ['Prayer', 'prayer', 'prayer'], ['Rest', 'rest', 'rest'], ['Entertainment', 'entertainment', 'music'], ['Chores', 'chores', 'chores'], ['On my phone', 'social media', 'phone'],
 ];
 
@@ -824,11 +828,331 @@ function ratingRow(name, scale, value, onPick) {
   );
 }
 
-/** The morning or evening check-in: mood, energy, and (evenings) a note. */
+// ------------------------------------------------------------------ note editor
+// Notes stay plain text with light Markdown (**bold**, - lists, - [ ] checks, # headings),
+// so the CLI and the skill read them as they are. The preview is built node by node, never as HTML.
+
+const NOTE_MAX = 10000;
+const LIST_RE = /^(\s*)([-*+] \[[ xX]\] |[-*+] |(\d+)[.)] |> )/;
+
+/** Inline Markdown into text nodes and elements. */
+function inlineNote(text) {
+  const out = [];
+  const re = /\*\*(.+?)\*\*|~~(.+?)~~|==(.+?)==|`([^`]+)`|\*([^*\s](?:[^*]*?[^*\s])?)\*|(?<![\p{L}\p{N}])_([^_\s](?:[^_]*?[^_\s])?)_(?![\p{L}\p{N}])/gu;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) out.push(h('strong', {}, inlineNote(m[1])));
+    else if (m[2] !== undefined) out.push(h('s', {}, inlineNote(m[2])));
+    else if (m[3] !== undefined) out.push(h('mark', {}, inlineNote(m[3])));
+    else if (m[4] !== undefined) out.push(h('code', {}, m[4]));
+    else out.push(h('em', {}, inlineNote(m[5] ?? m[6])));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/** A note as formatted blocks. `onToggle(lineIndex)` makes check items clickable. */
+function renderNote(text, onToggle) {
+  const root = h('div', { class: 'note-view', dir: 'auto' });
+  let list = null;
+  let para = null;
+  const close = () => ((list = null), (para = null));
+  text.split('\n').forEach((line, i) => {
+    const indent = Math.floor((line.match(/^\s*/)[0].replace(/\t/g, '  ').length) / 2);
+    const t = line.trim();
+    let m;
+    if (!t) return close();
+    if ((m = t.match(/^(#{1,3})\s+(.*)$/))) {
+      close();
+      return root.append(h(`h${m[1].length + 2}`, { class: 'note-h' }, inlineNote(m[2])));
+    }
+    if (/^(-{3,}|\*{3,})$/.test(t)) return close(), root.append(h('hr', {}));
+    if ((m = t.match(/^>\s?(.*)$/))) {
+      close();
+      const prev = root.lastElementChild;
+      if (prev?.tagName === 'BLOCKQUOTE') return prev.append(h('br'), ...inlineNote(m[1]));
+      return root.append(h('blockquote', {}, inlineNote(m[1])));
+    }
+    const check = t.match(/^[-*+] \[([ xX])\]\s?(.*)$/);
+    const bullet = !check && t.match(/^[-*+]\s+(.*)$/);
+    const num = !check && !bullet && t.match(/^(\d+)[.)]\s+(.*)$/);
+    if (check || bullet || num) {
+      para = null;
+      const tag = num ? 'ol' : 'ul';
+      const kind = check ? 'checks' : tag;
+      if (!list || list.dataset.kind !== kind) {
+        list = h(tag, { class: `note-list ${kind}`, 'data-kind': kind }, null);
+        if (num) list.start = Number(num[1]);
+        root.append(list);
+      }
+      const style = indent ? { marginInlineStart: `${indent * 20}px` } : undefined;
+      if (check) {
+        const done = check[1] !== ' ';
+        const box = h('input', { type: 'checkbox', checked: done, disabled: !onToggle, 'aria-label': check[2] || 'Item' });
+        if (onToggle) box.addEventListener('change', () => onToggle(i));
+        return list.append(h('li', { class: done ? 'done' : '', style }, h('label', {}, box, h('span', {}, inlineNote(check[2])))));
+      }
+      return list.append(h('li', { style }, inlineNote((bullet ?? num)[bullet ? 1 : 2])));
+    }
+    list = null;
+    if (para) para.append(h('br'), ...inlineNote(t));
+    else root.append((para = h('p', {}, inlineNote(t))));
+  });
+  return root;
+}
+
+/**
+ * A small text editor over a textarea: toolbar, shortcuts, lists that continue on Enter,
+ * Tab to indent list items, a preview, word count, and autosave. `onSave(text)` stores it;
+ * the returned element has `flush()` to save anything still pending.
+ */
+function noteEditor({ value = '', placeholder, label = 'Note', onSave }) {
+  const area = h('textarea', { class: 'note-input', placeholder, 'aria-label': label, dir: 'auto', maxlength: NOTE_MAX, spellcheck: 'true' });
+  area.value = value;
+  let saved = value;
+  let timer;
+  let saving = null;
+  const status = h('span', { class: 'note-status', 'aria-live': 'polite' }, value ? 'Saved' : '');
+  const count = h('span', { class: 'note-count' });
+
+  const grow = () => {
+    area.style.height = 'auto';
+    area.style.height = `${Math.min(Math.max(area.scrollHeight + 2, 120), 520)}px`;
+  };
+  const counts = () => {
+    const words = area.value.trim() ? area.value.trim().split(/\s+/).length : 0;
+    count.textContent = `${words} word${words === 1 ? '' : 's'}${area.value.length > NOTE_MAX * 0.9 ? ` · ${NOTE_MAX - area.value.length} characters left` : ''}`;
+  };
+  const save = async () => {
+    clearTimeout(timer);
+    if (saving) await saving;
+    const text = area.value;
+    if (text === saved) return;
+    status.textContent = 'Saving…';
+    saving = (async () => {
+      try {
+        await onSave(text);
+        saved = text;
+        status.textContent = `Saved ${clock(Date.now())}`;
+      } catch (error) {
+        status.textContent = 'Not saved';
+        handle(error);
+      }
+    })();
+    await saving;
+    saving = null;
+  };
+  const changed = () => {
+    grow();
+    counts();
+    if (area.value !== saved) status.textContent = 'Editing…';
+    clearTimeout(timer);
+    timer = setTimeout(save, 1200);
+    if (!view.hidden) showPreview();
+  };
+
+  /** Replaces [start, end) through the browser's own editing, so Ctrl+Z still undoes it. */
+  const replace = (start, end, text, selStart = start + text.length, selEnd = selStart) => {
+    area.focus();
+    area.setSelectionRange(start, end);
+    if (!document.execCommand('insertText', false, text)) area.setRangeText(text, start, end, 'end');
+    area.setSelectionRange(selStart, selEnd);
+    changed();
+  };
+  const lineBounds = () => {
+    const v = area.value;
+    const start = v.lastIndexOf('\n', area.selectionStart - 1) + 1;
+    let end = v.indexOf('\n', area.selectionEnd - (area.selectionEnd > area.selectionStart && v[area.selectionEnd - 1] === '\n' ? 1 : 0));
+    if (end === -1) end = v.length;
+    return [start, end];
+  };
+
+  const wrap = (mark) => {
+    const { selectionStart: s, selectionEnd: e, value: v } = area;
+    const sel = v.slice(s, e);
+    if (v.slice(s - mark.length, s) === mark && v.slice(e, e + mark.length) === mark) {
+      return replace(s - mark.length, e + mark.length, sel, s - mark.length, e - mark.length);
+    }
+    if (sel.startsWith(mark) && sel.endsWith(mark) && sel.length >= mark.length * 2) {
+      const inner = sel.slice(mark.length, -mark.length);
+      return replace(s, e, inner, s, s + inner.length);
+    }
+    replace(s, e, `${mark}${sel}${mark}`, s + mark.length, e + mark.length);
+  };
+
+  /** Puts `prefix` on every selected line, or takes it off when they all have it already. */
+  const prefixLines = (kind) => {
+    const [start, end] = lineBounds();
+    const lines = area.value.slice(start, end).split('\n');
+    const strip = (l) => l.replace(/^(\s*)(?:[-*+] \[[ xX]\] |[-*+] |\d+[.)] |> |#{1,3} )/, '$1');
+    const has = {
+      bullet: (l) => /^\s*[-*+] (?!\[[ xX]\] )/.test(l),
+      number: (l) => /^\s*\d+[.)] /.test(l),
+      check: (l) => /^\s*[-*+] \[[ xX]\] /.test(l),
+      quote: (l) => /^\s*> /.test(l),
+    }[kind];
+    const blank = lines.length === 1 && !lines[0].trim(); // an empty line starts a new list
+    const all = !blank && lines.every((l) => !l.trim() || has(l));
+    let n = 0;
+    const next = lines.map((l) => {
+      if (!l.trim() && !blank) return l;
+      const bare = strip(l);
+      if (all) return bare;
+      const [, ws, rest] = bare.match(/^(\s*)(.*)$/);
+      const p = { bullet: '- ', number: `${++n}. `, check: '- [ ] ', quote: '> ' }[kind];
+      return `${ws}${p}${rest}`;
+    });
+    const text = next.join('\n');
+    replace(start, end, text, start + text.length);
+  };
+
+  /** Cycles the line through heading sizes: none, #, ##, ###, none. */
+  const heading = () => {
+    const [start, end] = lineBounds();
+    const line = area.value.slice(start, end);
+    const level = (line.match(/^(#{1,3}) /)?.[1].length ?? 0);
+    const bare = line.replace(/^#{1,3} /, '').replace(/^\s*(?:[-*+] \[[ xX]\] |[-*+] |\d+[.)] |> )/, '');
+    const text = level === 3 ? bare : `${'#'.repeat(level + 1)} ${bare}`;
+    replace(start, end, text, start + text.length);
+  };
+
+  const indent = (out) => {
+    const [start, end] = lineBounds();
+    const lines = area.value.slice(start, end).split('\n');
+    const text = lines.map((l) => (out ? l.replace(/^( {1,2}|\t)/, '') : `  ${l}`)).join('\n');
+    if (lines.length > 1) return replace(start, end, text, start, start + text.length);
+    const caret = Math.max(start, area.selectionStart + text.length - (end - start));
+    replace(start, end, text, caret);
+  };
+
+  const insertLine = (text) => {
+    const { selectionStart: s, value: v } = area;
+    const before = s > 0 && v[s - 1] !== '\n' ? '\n' : '';
+    replace(s, area.selectionEnd, `${before}${text}\n`);
+  };
+
+  area.addEventListener('keydown', (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.toLowerCase();
+    if (mod && !e.shiftKey && k === 'b') return e.preventDefault(), wrap('**');
+    if (mod && !e.shiftKey && k === 'i') return e.preventDefault(), wrap('*');
+    if (mod && e.shiftKey && k === 'x') return e.preventDefault(), wrap('~~');
+    if (mod && e.shiftKey && k === 'h') return e.preventDefault(), wrap('==');
+    if (mod && !e.shiftKey && k === 'e') return e.preventDefault(), wrap('`');
+    if (mod && e.shiftKey && (e.code === 'Digit8' || k === '*')) return e.preventDefault(), prefixLines('bullet');
+    if (mod && e.shiftKey && (e.code === 'Digit7' || k === '&')) return e.preventDefault(), prefixLines('number');
+    if (mod && e.shiftKey && (e.code === 'Digit9' || k === '(')) return e.preventDefault(), prefixLines('check');
+    if (mod && k === 's') return e.preventDefault(), save();
+    if (mod && k === 'enter') return e.preventDefault(), save();
+    if (e.key === 'Tab' && !mod && !e.altKey) {
+      const [start, end] = lineBounds();
+      // Only inside a list or across lines, so Tab still moves on from plain text.
+      if (LIST_RE.test(area.value.slice(start, end)) || area.value.slice(area.selectionStart, area.selectionEnd).includes('\n')) {
+        e.preventDefault();
+        indent(e.shiftKey);
+      }
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !mod && !e.isComposing && area.selectionStart === area.selectionEnd) {
+      const s = area.selectionStart;
+      const start = area.value.lastIndexOf('\n', s - 1) + 1;
+      const line = area.value.slice(start, s);
+      const m = line.match(LIST_RE);
+      if (!m) return;
+      e.preventDefault();
+      if (line.slice(m[0].length).trim() === '' && area.value.slice(s).split('\n')[0].trim() === '') {
+        // Enter on an empty item ends the list (or steps out one level).
+        if (m[1]) return replace(start, s, `${m[1].slice(2)}${m[2]}`);
+        return replace(start, s, '');
+      }
+      const marker = m[3] ? `${Number(m[3]) + 1}${m[2].trim().slice(-1)} ` : /\[[ xX]\]/.test(m[2]) ? `${m[2][0]} [ ] ` : m[2];
+      replace(s, s, `\n${m[1]}${marker}`);
+    }
+  });
+  area.addEventListener('input', changed);
+  area.addEventListener('blur', () => save());
+  area.addEventListener('paste', () => setTimeout(grow, 0));
+
+  const view = h('div', { class: 'note-preview' });
+  view.hidden = true;
+  const toggleLine = (i) => {
+    const lines = area.value.split('\n');
+    lines[i] = lines[i].replace(/\[([ xX])\]/, (_, c) => (c === ' ' ? '[x]' : '[ ]'));
+    const start = lines.slice(0, i).reduce((n, l) => n + l.length + 1, 0);
+    const old = area.value.split('\n')[i];
+    // The textarea is hidden in preview, so edit its text directly rather than through the caret.
+    area.setRangeText(lines[i], start, start + old.length, 'preserve');
+    changed();
+    save();
+  };
+  const showPreview = () => {
+    view.replaceChildren(area.value.trim() ? renderNote(area.value, toggleLine) : h('p', { class: 'hint' }, 'Nothing written yet.'));
+  };
+
+  const btn = (labelText, title, run, cls = '') =>
+    h('button', { type: 'button', class: `tb ${cls}`, title, 'aria-label': title, onmousedown: (e) => e.preventDefault(), onclick: run }, labelText);
+  const previewBtn = h('button', { type: 'button', class: 'tb tb-text', 'aria-pressed': 'false', title: 'Preview how it reads' }, 'Preview');
+  const formatting = h(
+    'div',
+    { class: 'tb-group' },
+    btn('B', 'Bold (Ctrl+B)', () => wrap('**'), 'tb-b'),
+    btn('I', 'Italic (Ctrl+I)', () => wrap('*'), 'tb-i'),
+    btn('S', 'Strikethrough (Ctrl+Shift+X)', () => wrap('~~'), 'tb-s'),
+    btn('H', 'Highlight (Ctrl+Shift+H)', () => wrap('=='), 'tb-mark'),
+    h('i', { class: 'tb-sep' }),
+    btn('H₁', 'Heading (click again for smaller, then off)', heading),
+    btn('•', 'Bulleted list (Ctrl+Shift+8)', () => prefixLines('bullet')),
+    btn('1.', 'Numbered list (Ctrl+Shift+7)', () => prefixLines('number')),
+    btn('☐', 'Checklist (Ctrl+Shift+9)', () => prefixLines('check')),
+    btn('❝', 'Quote', () => prefixLines('quote')),
+    btn('—', 'Divider', () => insertLine('---')),
+    btn('⇥', 'Indent list item (Tab)', () => indent(false)),
+    btn('⇤', 'Outdent list item (Shift+Tab)', () => indent(true)),
+    h('i', { class: 'tb-sep' }),
+    btn('↶', 'Undo (Ctrl+Z)', () => (area.focus(), document.execCommand('undo'), changed())),
+    btn('↷', 'Redo (Ctrl+Y)', () => (area.focus(), document.execCommand('redo'), changed())),
+  );
+  previewBtn.addEventListener('click', () => {
+    const on = view.hidden;
+    view.hidden = !on;
+    area.hidden = on;
+    formatting.classList.toggle('off', on);
+    previewBtn.setAttribute('aria-pressed', String(on));
+    previewBtn.textContent = on ? 'Write' : 'Preview';
+    if (on) showPreview();
+    else area.focus(), grow();
+  });
+
+  const box = h(
+    'div',
+    { class: 'note-editor' },
+    h('div', { class: 'note-toolbar', role: 'toolbar', 'aria-label': `${label} formatting` }, formatting, previewBtn),
+    area,
+    view,
+    h('div', { class: 'note-foot' }, count, status, h('button', { type: 'button', class: 'btn sm', onclick: () => save() }, 'Save')),
+  );
+  box.flush = save;
+  counts();
+  requestAnimationFrame(grow);
+  return box;
+}
+
+/** The morning or evening check-in: mood, energy, and a note written in the note editor. */
 function checkinCard(dayKeyValue, part, checkins, refresh, { title, note, withNote = false, notePrompt } = {}) {
   const current = checkins.find((c) => c.part === part) ?? { mood: null, energy: null, note: null };
+  const editor = withNote
+    ? noteEditor({
+        value: current.note ?? '',
+        placeholder: `${notePrompt ?? 'Anything that affected how you felt? (optional)'}\nTip: - for a list, - [ ] for a checklist, **bold**`,
+        label: part === 'morning' ? 'Morning note' : 'Evening note',
+        onSave: (text) => api('/checkins', { method: 'PUT', body: { day: dayKeyValue, part, note: text } }),
+      })
+    : null;
   const save = async (change, message) => {
     try {
+      await editor?.flush(); // so a rating click never loses what's being typed
       await api('/checkins', { method: 'PUT', body: { day: dayKeyValue, part, ...change } });
       if (message) say(message);
       await refresh();
@@ -836,16 +1160,12 @@ function checkinCard(dayKeyValue, part, checkins, refresh, { title, note, withNo
       handle(error);
     }
   };
-  const noteBox = withNote
-    ? h('textarea', { class: 'checkin-note', placeholder: notePrompt ?? 'Anything that affected how you felt? (optional)', 'aria-label': 'Note', dir: 'auto' }, current.note ?? '')
-    : null;
   return card(
     title ?? (part === 'morning' ? 'How are you feeling?' : 'How did you feel today?'),
     note ?? (current.mood || current.energy ? `Saved ${clock(current.at)}` : null),
     ratingRow('Mood', MOODS, current.mood, (v) => save({ mood: v })),
     ratingRow('Energy', ENERGY, current.energy, (v) => save({ energy: v })),
-    noteBox,
-    noteBox ? h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn', onclick: () => save({ note: noteBox.value }, 'Note saved') }, 'Save note')) : null,
+    editor,
   );
 }
 
@@ -860,8 +1180,8 @@ function moodSummaryCard(day, refresh) {
     'Mood and energy',
     null,
     h('div', { class: 'mini-checkins' }, line('Morning', morning), line('Evening', evening)),
-    morning?.note ? h('p', { class: 'hint', style: { marginTop: '8px' }, dir: 'auto' }, `Morning: “${morning.note}”`) : null,
-    evening?.note ? h('p', { class: 'hint', style: { marginTop: '8px' }, dir: 'auto' }, `${morning?.note ? 'Evening: ' : ''}“${evening.note}”`) : null,
+    morning?.note ? h('div', { class: 'note-summary' }, h('h3', {}, 'Morning note'), renderNote(morning.note)) : null,
+    evening?.note ? h('div', { class: 'note-summary' }, h('h3', {}, 'Evening note'), renderNote(evening.note)) : null,
     !evening && day.date === today() ? h('p', { class: 'hint', style: { marginTop: '8px' } }, 'The evening log asks again. ', h('a', { href: '#evening' }, 'Check in now')) : null,
   );
 }
@@ -2746,6 +3066,556 @@ function projectsGlanceCard(key, projects, { title = 'Projects', morning = false
   );
 }
 
+// ------------------------------------------------------------------ health
+
+const MEAL_NAMES = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snacks' };
+const mealForNow = () => {
+  const hour = new Date().getHours();
+  return hour < 11 ? 'breakfast' : hour < 16 ? 'lunch' : hour < 22 ? 'dinner' : 'snack';
+};
+const round1 = (n) => Math.round(n * 10) / 10;
+const kcal = (n) => `${Math.round(n).toLocaleString('en-GB')} kcal`;
+const grams = (n) => `${round1(n)} g`;
+const kg = (n) => `${n.toFixed(1)} kg`;
+const signed = (n, unit) => `${n > 0 ? '+' : n < 0 ? '−' : '±'}${Math.abs(round1(n)).toFixed(1)} ${unit}`;
+/** A number from an input, or null when it's empty. */
+const numberOf = (input) => (input.value.trim() === '' ? null : Number(input.value));
+const macros = (f) =>
+  [f.calories !== null ? kcal(f.calories) : null, f.protein !== null ? `${round1(f.protein)} g protein` : null, f.carbs !== null ? `${round1(f.carbs)} g carbs` : null, f.fat !== null ? `${round1(f.fat)} g fat` : null]
+    .filter(Boolean)
+    .join(' · ');
+
+function svg(tag, attrs = {}, ...children) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+  for (const c of children.flat(Infinity)) if (c) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+
+function targetSub(value, target, format) {
+  if (!target) return 'set a daily target below';
+  const left = target - value;
+  return [progressBar(value / target, left < 0 ? 'var(--dawn)' : 'var(--accent)', 'Of the target'), left >= 0 ? `${format(left)} left of ${format(target)}` : `${format(-left)} over ${format(target)}`];
+}
+
+function healthStats(v, key) {
+  const latest = v.weights.at(-1) ?? null;
+  const monthAgo = v.weights.find((w) => w.day >= shiftDay(key, -30) && w.day !== latest?.day);
+  const weightSub = latest
+    ? [latest.day === key ? 'today' : `on ${shortDay(latest.day)}`, monthAgo ? ` · ${signed(latest.weight - monthAgo.weight, 'kg')} since ${shortDay(monthAgo.day)}` : null]
+    : 'not weighed yet';
+  return h(
+    'div',
+    { class: 'stats' },
+    stat('Calories', kcal(v.totals.calories), targetSub(v.totals.calories, v.targets.calories, kcal)),
+    stat('Protein', grams(v.totals.protein), targetSub(v.totals.protein, v.targets.protein, grams)),
+    stat('Carbs · fat', v.foods.some((f) => f.carbs !== null || f.fat !== null) ? `${Math.round(v.totals.carbs)} · ${Math.round(v.totals.fat)} g` : '—', v.foods.length ? `${v.foods.length} thing${v.foods.length === 1 ? '' : 's'} logged` : 'nothing logged yet'),
+    stat('Weight', latest ? kg(latest.weight) : '—', weightSub),
+  );
+}
+
+function foodCard(v, key) {
+  let meal = mealForNow();
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Meal' });
+  const drawSeg = () =>
+    seg.replaceChildren(
+      ...Object.entries(MEAL_NAMES).map(([m, name]) => h('button', { type: 'button', class: m === meal ? 'on' : '', 'aria-pressed': String(m === meal), onclick: () => { meal = m; drawSeg(); } }, name.replace(/s$/, ''))),
+    );
+  drawSeg();
+  const name = h('input', { type: 'text', dir: 'auto', placeholder: 'What you ate: 2 eggs and toast', 'aria-label': 'What you ate' });
+  const field = (label, unit, step = 1) => h('input', { type: 'number', min: 0, step, inputmode: 'decimal', placeholder: unit, 'aria-label': label, class: 'num-in' });
+  const cal = field('Calories', 'kcal');
+  const protein = field('Protein in grams', 'protein g', 0.1);
+  const carbs = field('Carbs in grams', 'carbs g', 0.1);
+  const fat = field('Fat in grams', 'fat g', 0.1);
+
+  const send = oneAtATime(async (food) => {
+    try {
+      await api('/health/foods', { method: 'POST', body: { day: key, meal, ...food } });
+      say(`Logged: ${food.name}`);
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  const add = () => {
+    if (!name.value.trim()) {
+      say('Write what you ate', true);
+      name.focus();
+      return;
+    }
+    send({ name: name.value.trim(), calories: numberOf(cal), protein: numberOf(protein), carbs: numberOf(carbs), fat: numberOf(fat) });
+  };
+  for (const input of [name, cal, protein, carbs, fat]) input.addEventListener('keydown', (e) => e.key === 'Enter' && add());
+
+  const recent = v.recent.length
+    ? h(
+        'div',
+        { class: 'field', style: { marginTop: '12px' } },
+        h('span', {}, 'Again'),
+        h('div', { class: 'chips' }, v.recent.map((f) => h('button', { class: 'chip', dir: 'auto', title: macros(f) || 'No amounts', onclick: () => send({ name: f.name, calories: f.calories, protein: f.protein, carbs: f.carbs, fat: f.fat }) }, icon('plus'), f.name))),
+      )
+    : null;
+
+  const groups = Object.keys(MEAL_NAMES)
+    .map((m) => [m, v.foods.filter((f) => f.meal === m)])
+    .filter(([, list]) => list.length);
+  const list = groups.length
+    ? groups.map(([m, foods]) => {
+        const sub = foods.reduce((s, f) => s + (f.calories ?? 0), 0);
+        return h(
+          'div',
+          { class: 'meal-group' },
+          h('div', { class: 'meal-head' }, h('h3', {}, MEAL_NAMES[m]), sub ? h('span', { class: 'time' }, kcal(sub)) : null),
+          h(
+            'ul',
+            { class: 'list' },
+            foods.map((f) =>
+              h(
+                'li',
+                { class: 'task' },
+                h('span', { class: 'grow' }, h('span', { class: 'text', dir: 'auto' }, f.name), h('div', { class: 'hint' }, macros(f) || 'no amounts')),
+                h('span', { class: 'time' }, clock(f.at)),
+                h('button', {
+                  class: 'icon-btn',
+                  title: 'Delete',
+                  'aria-label': `Delete ${f.name}`,
+                  onclick: async () => {
+                    try {
+                      await api(`/health/foods/${f.id}`, { method: 'DELETE' });
+                      await render();
+                    } catch (error) {
+                      handle(error);
+                    }
+                  },
+                }, '×'),
+              ),
+            ),
+          ),
+        );
+      })
+    : h('p', { class: 'empty' }, key === today() ? 'Nothing logged yet today.' : 'Nothing was logged this day.');
+
+  return card(
+    'Food',
+    'Log what you ate. Amounts are optional: put in what you know.',
+    h(
+      'div',
+      { class: 'form-grid', style: { gap: '10px' } },
+      seg,
+      name,
+      h('div', { class: 'row food-amounts' }, cal, protein, carbs, fat, h('button', { class: 'btn primary', onclick: add }, icon('plus'), 'Add')),
+    ),
+    recent,
+    h('div', { style: { marginTop: '16px' } }, list),
+  );
+}
+
+function weightChart(weights) {
+  if (weights.length < 2) return h('p', { class: 'empty' }, weights.length ? 'Weigh in on another day to see the trend.' : 'No weigh-ins in the last 90 days.');
+  const W = 380, H = 160, L = 38, R = 8, T = 10, B = 22;
+  const t = weights.map((w) => parseDay(w.day));
+  const ys = weights.map((w) => w.weight);
+  const t0 = t[0], t1 = t.at(-1);
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  const padY = Math.max(0.5, (hi - lo) * 0.15);
+  lo -= padY;
+  hi += padY;
+  const x = (ms) => L + ((ms - t0) / (t1 - t0)) * (W - L - R);
+  const y = (kgValue) => T + (1 - (kgValue - lo) / (hi - lo)) * (H - T - B);
+  const points = weights.map((w, i) => `${x(t[i]).toFixed(1)},${y(w.weight).toFixed(1)}`).join(' ');
+  const ticks = [hi - padY, (hi + lo) / 2, lo + padY];
+  return svg(
+    'svg',
+    { class: 'weight-chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Weight from ${kg(ys[0])} to ${kg(ys.at(-1))}` },
+    ticks.map((v) => [
+      svg('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid-line' }),
+      svg('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis-text' }, v.toFixed(1)),
+    ]),
+    svg('text', { x: L, y: H - 6, class: 'axis-text' }, shortDay(weights[0].day)),
+    svg('text', { x: W - R, y: H - 6, 'text-anchor': 'end', class: 'axis-text' }, shortDay(weights.at(-1).day)),
+    svg('polyline', { points, class: 'trend' }),
+    weights.map((w, i) => svg('circle', { cx: x(t[i]), cy: y(w.weight), r: 3.5, class: 'pt' }, svg('title', {}, `${shortDay(w.day)}: ${kg(w.weight)}`))),
+  );
+}
+
+function weightCard(v, key) {
+  const w = v.weighIn;
+  const input = (label, unit, value, step = 0.1) => h('label', { class: 'field' }, h('span', {}, label), h('input', { type: 'number', min: 0, step, inputmode: 'decimal', value: value ?? '', placeholder: unit, class: 'num-in' }));
+  const weight = input('Weight (kg)', 'kg', w?.weight);
+  const fatPct = input('Body fat (%)', '%', w?.bodyFat);
+  const waist = input('Waist (cm)', 'cm', w?.waist, 0.5);
+  const read = (label) => numberOf(label.querySelector('input'));
+  const save = oneAtATime(async () => {
+    const value = read(weight);
+    if (!value) {
+      say('Put in your weight', true);
+      return;
+    }
+    try {
+      await api(`/health/weight/${key}`, { method: 'PUT', body: { weight: value, bodyFat: read(fatPct), waist: read(waist) } });
+      say('Weigh-in saved');
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  for (const label of [weight, fatPct, waist]) label.querySelector('input').addEventListener('keydown', (e) => e.key === 'Enter' && save());
+
+  const recent = [...v.weights].reverse().slice(0, 6);
+  return card(
+    'Weight and measurements',
+    key === today() ? 'One weigh-in a day. Weighing again today replaces it.' : `For ${longDate(key)}.`,
+    h(
+      'div',
+      { class: 'row weigh-row' },
+      weight,
+      fatPct,
+      waist,
+      h('button', { class: 'btn primary', onclick: save }, icon('scale'), w ? 'Update' : 'Save'),
+      w
+        ? h('button', {
+            class: 'btn ghost danger',
+            onclick: async () => {
+              if (!confirm(`Delete the weigh-in for ${longDate(key)}?`)) return;
+              try {
+                await api(`/health/weight/${key}`, { method: 'DELETE' });
+                await render();
+              } catch (error) {
+                handle(error);
+              }
+            },
+          }, 'Delete')
+        : null,
+    ),
+    h('div', { style: { marginTop: '16px' } }, weightChart(v.weights)),
+    recent.length
+      ? h(
+          'ul',
+          { class: 'list', style: { marginTop: '8px' } },
+          recent.map((r, i) => {
+            const before = recent[i + 1];
+            return h(
+              'li',
+              {},
+              h('a', { class: 'grow', href: `#health/${r.day}` }, shortDay(r.day)),
+              h('span', { class: 'time' }, [r.bodyFat !== null ? `${round1(r.bodyFat)}% fat` : null, r.waist !== null ? `${round1(r.waist)} cm waist` : null].filter(Boolean).join(' · ')),
+              before ? h('span', { class: 'time' }, signed(r.weight - before.weight, 'kg')) : null,
+              h('strong', { class: 'num' }, kg(r.weight)),
+            );
+          }),
+        )
+      : null,
+  );
+}
+
+function caloriesWeekCard(v) {
+  const target = v.targets.calories;
+  const max = Math.max(target ?? 0, ...v.week.map((d) => d.calories), 1);
+  const logged = v.week.filter((d) => d.items > 0);
+  const avg = logged.length ? logged.reduce((s, d) => s + d.calories, 0) / logged.length : null;
+  return card(
+    'Last 7 days',
+    avg !== null ? `${kcal(avg)} a day on average, over ${logged.length} day${logged.length === 1 ? '' : 's'} logged` : 'Nothing logged this week yet.',
+    h(
+      'div',
+      { class: 'cal-week' },
+      v.week.map((d) =>
+        h(
+          'a',
+          { class: `cal-day${d.day === v.day ? ' on' : ''}`, href: `#health/${d.day}`, title: d.items ? `${shortDay(d.day)}: ${kcal(d.calories)}, ${grams(d.protein)} protein` : `${shortDay(d.day)}: nothing logged` },
+          h('div', { class: 'cal-bar-box' }, target ? h('div', { class: 'cal-target', style: { bottom: `${(target / max) * 100}%` } }) : null, h('div', { class: `cal-bar${target && d.calories > target ? ' over' : ''}`, style: { height: `${(d.calories / max) * 100}%` } })),
+          h('span', {}, WEEKDAY_SHORT(d.day)),
+        ),
+      ),
+    ),
+  );
+}
+
+function targetsCard(v) {
+  const cal = h('input', { type: 'number', min: 1, step: 50, value: v.targets.calories ?? '', placeholder: 'e.g. 2200', class: 'num-in', 'aria-label': 'Calories a day' });
+  const protein = h('input', { type: 'number', min: 1, step: 5, value: v.targets.protein ?? '', placeholder: 'e.g. 140', class: 'num-in', 'aria-label': 'Protein grams a day' });
+  const save = oneAtATime(async () => {
+    try {
+      await api('/health/targets', { method: 'PUT', body: { calories: numberOf(cal), protein: numberOf(protein) } });
+      say('Targets saved');
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  return card(
+    'Daily targets',
+    'Leave one empty to not track it.',
+    h('div', { class: 'row' }, h('label', { class: 'field' }, h('span', {}, 'Calories'), cal), h('label', { class: 'field' }, h('span', {}, 'Protein (g)'), protein), h('button', { class: 'btn', style: { alignSelf: 'end' }, onclick: save }, 'Save')),
+  );
+}
+
+// Exercise: workouts and their sets, on the Health page's second tab.
+
+const WORKOUT_KINDS = [['strength', 'Strength'], ['run', 'Run'], ['walk', 'Walk'], ['cycle', 'Cycle'], ['swim', 'Swim'], ['sport', 'Sport'], ['other', 'Other']];
+const kindName = (k) => WORKOUT_KINDS.find(([v]) => v === k)?.[1] ?? cap(k);
+const n1 = (n) => String(round1(n));
+const setAmount = (s) =>
+  s.reps !== null ? String(s.reps) : s.seconds !== null ? (s.seconds >= 120 && s.seconds % 60 === 0 ? `${s.seconds / 60} min` : `${n1(s.seconds)} s`) : s.distance !== null ? (s.distance >= 1000 ? `${n1(s.distance / 1000)} km` : `${n1(s.distance)} m`) : '?';
+const sameSet = (a, b) => a.reps === b.reps && a.weight === b.weight && a.seconds === b.seconds && a.distance === b.distance;
+function setRuns(sets) {
+  const out = [];
+  for (const s of sets) {
+    const last = out.at(-1);
+    if (last && sameSet(last[1], s)) last[0]++;
+    else out.push([1, s]);
+  }
+  return out;
+}
+/** "3×8 @ 60 kg, 1×6 @ 62.5 kg": the same as the command line writes them. */
+const setsText = (sets) => setRuns(sets).map(([n, s]) => `${n}×${setAmount(s)}${s.weight !== null ? ` @ ${n1(s.weight)} kg` : ''}`).join(', ');
+/** The short way, to log the same again: "3x8@60 6@62.5". */
+const setsSpec = (sets) =>
+  setRuns(sets)
+    .map(([n, s]) => `${n > 1 ? `${n}x` : ''}${s.reps !== null ? s.reps : s.seconds !== null ? `${n1(s.seconds)}s` : s.distance !== null ? `${n1(s.distance)}m` : ''}${s.weight !== null ? `@${n1(s.weight)}` : ''}`)
+    .join(' ');
+const volumeOf = (sets) => sets.reduce((v, s) => v + (s.reps ?? 0) * (s.weight ?? 0), 0);
+const kgText = (n) => `${Math.round(n).toLocaleString('en-GB')} kg`;
+
+function exerciseStats(v) {
+  const sum = (pick) => v.week.reduce((s, d) => s + pick(d), 0);
+  const days = v.week.filter((d) => d.sessions > 0).length;
+  const dayVolume = v.workouts.reduce((s, w) => s + volumeOf(w.sets), 0);
+  return h(
+    'div',
+    { class: 'stats' },
+    stat('Sessions', String(sum((d) => d.sessions)), `last 7 days · ${days} day${days === 1 ? '' : 's'} trained`),
+    stat('Minutes', String(Math.round(sum((d) => d.minutes))), 'last 7 days'),
+    stat('Volume', kgText(sum((d) => d.volume)), 'last 7 days · reps × kg'),
+    stat(v.day === today() ? 'Today' : 'This day', v.workouts.length ? `${v.workouts.length} workout${v.workouts.length === 1 ? '' : 's'}` : '—', dayVolume ? `${kgText(dayVolume)} volume` : v.workouts.length ? null : 'no workout logged'),
+  );
+}
+
+function newWorkoutCard(v, key) {
+  let kind = 'strength';
+  const seg = h('div', { class: 'seg wrap', role: 'group', 'aria-label': 'Kind of workout' });
+  const drawSeg = () => seg.replaceChildren(...WORKOUT_KINDS.map(([k, name]) => h('button', { type: 'button', class: k === kind ? 'on' : '', 'aria-pressed': String(k === kind), onclick: () => { kind = k; drawSeg(); } }, name)));
+  drawSeg();
+  const name = h('input', { type: 'text', dir: 'auto', placeholder: 'Push day, Legs, 5 km run…', 'aria-label': 'Workout name' });
+  const minutes = h('input', { type: 'number', min: 0, step: 5, placeholder: 'minutes', class: 'num-in', 'aria-label': 'Minutes' });
+  const at = h('input', { type: 'time', 'aria-label': 'Started at' });
+  const add = oneAtATime(async () => {
+    if (!name.value.trim()) {
+      say('Name the workout', true);
+      name.focus();
+      return;
+    }
+    try {
+      await api('/exercise/workouts', { method: 'POST', body: { day: key, name: name.value.trim(), kind, minutes: numberOf(minutes), start: at.value ? onDay(key, at.value) : null } });
+      say('Workout logged: add its exercises below');
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  for (const input of [name, minutes, at]) input.addEventListener('keydown', (e) => e.key === 'Enter' && add());
+  return card(
+    'Log a workout',
+    'Then add each exercise with its sets.',
+    h('div', { class: 'form-grid', style: { gap: '10px' } }, seg, name, h('div', { class: 'row' }, minutes, h('span', { class: 'hint' }, 'started'), at, h('button', { class: 'btn primary', style: { marginLeft: 'auto' }, onclick: add }, icon('plus'), 'Add workout'))),
+  );
+}
+
+function workoutCard(w, v) {
+  const del = async () => {
+    if (!confirm(`Delete "${w.name}" and its ${w.sets.length} set${w.sets.length === 1 ? '' : 's'}?`)) return;
+    try {
+      await api(`/exercise/workouts/${w.id}`, { method: 'DELETE' });
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  };
+  const names = [...new Set(w.sets.map((s) => s.exercise))];
+  const exercises = names.length
+    ? h(
+        'ul',
+        { class: 'list' },
+        names.map((name) => {
+          const sets = w.sets.filter((s) => s.exercise === name);
+          return h(
+            'li',
+            { class: 'exercise-row' },
+            h('div', { class: 'grow' }, h('div', { class: 'text', dir: 'auto' }, name), h('div', { class: 'hint' }, setsText(sets))),
+            h(
+              'div',
+              { class: 'set-pills' },
+              sets.map((s) =>
+                h('button', {
+                  class: 'set-pill',
+                  title: 'Remove this set',
+                  'aria-label': `Remove set ${s.setNo} of ${name}`,
+                  onclick: async () => {
+                    try {
+                      await api(`/exercise/sets/${s.id}`, { method: 'DELETE' });
+                      await render();
+                    } catch (error) {
+                      handle(error);
+                    }
+                  },
+                }, `${setAmount(s)}${s.weight !== null ? ` @ ${n1(s.weight)}` : ''}`),
+              ),
+            ),
+          );
+        }),
+      )
+    : h('p', { class: 'empty' }, 'No exercises yet.');
+
+  const exercise = h('input', { type: 'text', dir: 'auto', placeholder: 'Exercise', list: 'exercise-names', 'aria-label': 'Exercise' });
+  const spec = h('input', { type: 'text', placeholder: '3x8@60', class: 'spec-in', 'aria-label': 'Sets, like 3x8@60' });
+  const addSets = oneAtATime(async () => {
+    if (!exercise.value.trim() || !spec.value.trim()) {
+      say('Write the exercise and its sets, like 3x8@60', true);
+      return;
+    }
+    try {
+      await api(`/exercise/workouts/${w.id}/sets`, { method: 'POST', body: { exercise: exercise.value.trim(), spec: spec.value } });
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  for (const input of [exercise, spec]) input.addEventListener('keydown', (e) => e.key === 'Enter' && addSets());
+  const fill = (name) => {
+    exercise.value = name;
+    const last = v.history.find((x) => x.exercise.toLowerCase() === name.toLowerCase());
+    spec.value = last ? setsSpec(last.lastSets) : '';
+    spec.focus();
+  };
+  const meta = [w.start !== null ? clock(w.start) : null, kindName(w.kind), w.minutes !== null ? `${Math.round(w.minutes)} min` : null, w.calories !== null ? kcal(w.calories) : null, volumeOf(w.sets) ? `${kgText(volumeOf(w.sets))} volume` : null].filter(Boolean).join(' · ');
+  return h(
+    'section',
+    { class: 'card' },
+    h(
+      'header',
+      { class: 'workout-head' },
+      h('div', {}, h('h2', { dir: 'auto' }, w.name, w.source !== 'manual' ? h('span', { class: 'badge', style: { marginLeft: '8px' } }, `from ${cap(w.source)}`) : null), h('p', {}, meta)),
+      h('button', { class: 'btn ghost sm danger', onclick: del }, 'Delete'),
+    ),
+    w.note ? h('p', { class: 'hint', dir: 'auto', style: { marginBottom: '8px' } }, w.note) : null,
+    exercises,
+    h('div', { class: 'add-row workout-add' }, exercise, spec, h('button', { class: 'btn primary', onclick: addSets }, 'Add sets')),
+    h('p', { class: 'hint', style: { marginTop: '6px' } }, '3x8@60 is 3 sets of 8 at 60 kg. Also 8/8/6@60, 3x10 (bodyweight), 3x30s, 5km.'),
+    v.recent.length ? h('div', { class: 'chips', style: { marginTop: '10px' } }, v.recent.slice(0, 8).map((name) => h('button', { class: 'chip', dir: 'auto', onclick: () => fill(name) }, icon('plus'), name))) : null,
+  );
+}
+
+function trainingWeekCard(v) {
+  const max = Math.max(...v.week.map((d) => d.minutes), 1);
+  return card(
+    'Last 7 days',
+    'Minutes trained each day.',
+    h(
+      'div',
+      { class: 'cal-week' },
+      v.week.map((d) =>
+        h(
+          'a',
+          { class: `cal-day${d.day === v.day ? ' on' : ''}`, href: `#health/${d.day}`, title: d.sessions ? `${shortDay(d.day)}: ${d.sessions} session${d.sessions === 1 ? '' : 's'}, ${Math.round(d.minutes)} min${d.volume ? `, ${kgText(d.volume)} volume` : ''}` : `${shortDay(d.day)}: rest` },
+          h('div', { class: 'cal-bar-box' }, h('div', { class: 'cal-bar', style: { height: `${d.minutes ? (d.minutes / max) * 100 : d.sessions ? 8 : 0}%` } })),
+          h('span', {}, WEEKDAY_SHORT(d.day)),
+        ),
+      ),
+    ),
+  );
+}
+
+function recordsCard(v) {
+  return card(
+    'Exercises',
+    'Your best set and the last time, for what you did lately.',
+    v.history.length
+      ? h(
+          'ul',
+          { class: 'list' },
+          v.history.map((x) =>
+            h(
+              'li',
+              {},
+              h('div', { class: 'grow' }, h('div', { class: 'text', dir: 'auto' }, x.exercise), h('div', { class: 'hint' }, `Last ${shortDay(x.lastDay)}: ${setsText(x.lastSets)}`)),
+              h('div', { class: 'record' }, x.best ? h('strong', { class: 'num' }, `${n1(x.best.weight)} kg${x.best.reps !== null ? ` × ${x.best.reps}` : ''}`) : h('span', { class: 'hint' }, 'no weights'), x.best ? h('div', { class: 'hint' }, `best · ${shortDay(x.best.day)}`) : null),
+            ),
+          ),
+        )
+      : h('p', { class: 'empty' }, 'Log a workout with its sets and your records show up here.'),
+  );
+}
+
+function importCard() {
+  return card(
+    'Import from Caliber',
+    null,
+    h('p', { class: 'hint' }, 'Export your workout data from the Caliber app, save the file on this PC, then ask Claude to import it, or run:'),
+    h('pre', { class: 'code' }, 'npm run raqib -- workout import <file> --dry-run'),
+    h('p', { class: 'hint' }, 'Importing the same file again adds nothing twice.'),
+  );
+}
+
+let healthTab = (() => {
+  try {
+    return localStorage.getItem('raqib.healthTab') === 'exercise' ? 'exercise' : 'food';
+  } catch {
+    return 'food';
+  }
+})();
+
+async function healthPage(date) {
+  const key = date && date <= today() ? date : today();
+  setTopnav(key, '#health');
+  const tab = healthTab;
+  const tabs = h(
+    'div',
+    { class: 'seg', role: 'tablist', 'aria-label': 'Health' },
+    [['food', 'Food and weight'], ['exercise', 'Exercise']].map(([t, name]) =>
+      h('button', {
+        type: 'button',
+        role: 'tab',
+        class: t === tab ? 'on' : '',
+        'aria-selected': String(t === tab),
+        onclick: () => {
+          healthTab = t;
+          try {
+            localStorage.setItem('raqib.healthTab', t);
+          } catch {}
+          render();
+        },
+      }, name),
+    ),
+  );
+  const head = h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Health'), h('p', {}, key === today() ? `Today, ${longDate(key)}` : longDate(key))), tabs);
+  if (tab === 'exercise') {
+    const v = await api(`/exercise?date=${key}`);
+    return [
+      head,
+      h('datalist', { id: 'exercise-names' }, v.recent.map((name) => h('option', { value: name }))),
+      exerciseStats(v),
+      h(
+        'div',
+        { class: 'grid cols-2' },
+        h('div', { class: 'stack' }, v.workouts.map((w) => workoutCard(w, v)), newWorkoutCard(v, key)),
+        h('div', { class: 'stack' }, trainingWeekCard(v), recordsCard(v), importCard()),
+      ),
+    ];
+  }
+  const v = await api(`/health?date=${key}`);
+  return [
+    head,
+    healthStats(v, key),
+    h(
+      'div',
+      { class: 'grid cols-2' },
+      h('div', { class: 'stack' }, foodCard(v, key)),
+      h('div', { class: 'stack' }, weightCard(v, key), caloriesWeekCard(v), targetsCard(v)),
+    ),
+  ];
+}
+
 // ------------------------------------------------------------------ router
 
 function closeOr(hash) {
@@ -2771,15 +3641,15 @@ function showSignedOut() {
   );
 }
 
-const PAGES = { today: todayPage, morning: morningPage, evening: eveningPage, back: backPage, week: weekPage, projects: projectsPage, reminders: remindersPage, settings: settingsPage };
-const TITLES = { today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', projects: 'Projects', reminders: 'Reminders', settings: 'Settings' };
+const PAGES = { today: todayPage, morning: morningPage, evening: eveningPage, back: backPage, week: weekPage, projects: projectsPage, health: healthPage, reminders: remindersPage, settings: settingsPage };
+const TITLES = { today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', projects: 'Projects', health: 'Health', reminders: 'Reminders', settings: 'Settings' };
 let rendering = 0;
 
 async function render() {
   const [page = 'today', date] = location.hash.replace(/^#/, '').split('/');
   const view = PAGES[page] ? page : 'today';
   for (const link of document.querySelectorAll('.nav')) link.classList.toggle('active', link.dataset.page === view);
-  if (view !== 'today' && view !== 'evening') setTopnav(null);
+  if (view !== 'today' && view !== 'evening' && view !== 'health') setTopnav(null);
   document.body.classList.toggle('compact', view === 'back');
   document.title = `رقيب · ${TITLES[view]}`;
   const ticket = ++rendering;
@@ -2810,6 +3680,6 @@ setInterval(tick, 15_000);
 // Keep "today" fresh while the window stays open.
 setInterval(() => {
   const page = location.hash.replace(/^#/, '').split('/')[0] || 'today';
-  if (page === 'today' && !document.querySelector('input:focus, select:focus')) render();
+  if (page === 'today' && !document.querySelector('input:focus, select:focus, textarea:focus')) render();
 }, 60_000);
 render();

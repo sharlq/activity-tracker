@@ -602,3 +602,83 @@ details.finished summary { cursor: pointer; margin-bottom: 12px; font-size: 11.5
   .project-controls .spacer { display: none; }
   .status { display: none; }
 }
+
+/* ---------- Note editor ---------- */
+.note-editor { margin-top: 12px; border: 1px solid var(--line-control); border-radius: var(--radius-sm); background: var(--panel-2); overflow: hidden; }
+.note-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.note-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.tb-group { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.tb-group.off { opacity: 0.35; pointer-events: none; }
+.tb { border: 0; background: transparent; color: var(--ink-muted); min-width: 28px; height: 28px; padding: 0 6px; border-radius: 6px; cursor: pointer; font-size: 13.5px; line-height: 1; }
+.tb:hover { background: var(--panel-2); color: var(--ink); }
+.tb:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tb[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-ink); }
+.tb-text { font-weight: 600; font-size: 12.5px; padding: 0 10px; }
+.tb-b { font-weight: 800; }
+.tb-i { font-style: italic; font-family: Georgia, serif; }
+.tb-s { text-decoration: line-through; }
+.tb-mark { background: var(--accent-soft); color: var(--accent-ink); font-weight: 700; }
+.tb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.note-editor textarea.note-input { border: 0; border-radius: 0; background: transparent; min-height: 120px; padding: 10px 12px; line-height: 22px; resize: none; display: block; box-shadow: none; outline: none; }
+.note-preview { padding: 10px 12px; min-height: 120px; }
+.note-foot { display: flex; align-items: center; gap: 12px; padding: 4px 6px 4px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.note-foot .note-count { flex: 1; }
+.note-view { line-height: 22px; overflow-wrap: anywhere; }
+.note-view > * { margin: 0 0 8px; }
+.note-view > :last-child { margin-bottom: 0; }
+.note-view .note-h { margin: 12px 0 6px; font-weight: 700; }
+.note-view h3.note-h { font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.note-view h4.note-h { font-size: 15px; }
+.note-view h5.note-h { font-size: 14px; color: var(--ink-muted); }
+.note-view > .note-h:first-child { margin-top: 0; }
+.note-view .note-list { padding-inline-start: 22px; }
+.note-view .note-list.checks { list-style: none; padding-inline-start: 0; }
+.note-view .checks li label { display: inline-flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.note-view .checks li input { margin-top: 1px; }
+.note-view .checks li.done span { text-decoration: line-through; color: var(--ink-muted); }
+.note-view blockquote { border-inline-start: 3px solid var(--accent); padding-inline-start: 10px; color: var(--ink-muted); }
+.note-view mark { background: var(--accent-soft); color: var(--accent-ink); border-radius: 3px; padding: 0 2px; }
+.note-view code { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 12.5px; }
+.note-view hr { border: 0; border-top: 1px solid var(--line); }
+.note-summary { margin-top: 12px; }
+.note-summary h3 { margin-bottom: 4px; }
+
+/* ---------- Health ---------- */
+.num-in { width: 104px; }
+.food-amounts .btn { margin-left: auto; }
+.weigh-row { align-items: end; }
+.meal-group + .meal-group { margin-top: 14px; }
+.meal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.meal-head h3 { margin: 0; font-size: 13px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-muted); }
+.meal-group .list .hint { font-size: 12.5px; margin-top: 1px; }
+.weight-chart { width: 100%; height: auto; display: block; }
+.weight-chart .grid-line { stroke: var(--line); stroke-width: 1; }
+.weight-chart .axis-text { fill: var(--ink-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.weight-chart .trend { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.weight-chart .pt { fill: var(--panel); stroke: var(--accent); stroke-width: 2; }
+.cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; height: 140px; }
+.cal-day { display: grid; grid-template-rows: 1fr auto; gap: 4px; text-decoration: none; color: var(--ink-muted); font-size: 11.5px; text-align: center; min-width: 0; }
+.cal-day.on { color: var(--ink); font-weight: 650; }
+.cal-bar-box { position: relative; background: var(--track); border-radius: var(--radius-sm); overflow: hidden; }
+.cal-bar { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); border-radius: var(--radius-bar) var(--radius-bar) 0 0; }
+.cal-bar.over { background: var(--dawn); }
+.cal-day:hover .cal-bar-box { box-shadow: inset 0 0 0 1px var(--line-control); }
+.cal-target { position: absolute; left: 0; right: 0; height: 0; border-top: 1.5px dashed var(--ink-muted); z-index: 1; pointer-events: none; }
+.stat .pbar { height: 6px; margin: 4px 0 3px; }
+
+/* ---------- Exercise ---------- */
+.seg.wrap { flex-wrap: wrap; }
+.workout-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.workout-head h2 { display: flex; align-items: center; flex-wrap: wrap; }
+.exercise-row { align-items: flex-start !important; flex-wrap: wrap; }
+.exercise-row .text { unicode-bidi: plaintext; font-weight: 600; }
+.set-pills { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; max-width: 55%; }
+.set-pill { height: 24px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.set-pill:hover { border-color: var(--danger); color: var(--danger); text-decoration: line-through; }
+.workout-add { flex-wrap: wrap; }
+.workout-add input:first-child { flex: 1 1 160px; min-width: 0; }
+.workout-add .spec-in { flex: 1 1 110px; max-width: 160px; }
+.workout-head > div { display: grid; gap: 2px; }
+.card > header.workout-head p { margin: 0; text-align: left; }
+.record { text-align: right; white-space: nowrap; }
+pre.code { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; margin: 8px 0; font-size: 12.5px; overflow-x: auto; }

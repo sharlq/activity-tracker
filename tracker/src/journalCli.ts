@@ -1,4 +1,4 @@
-// raqib day | log | unlog | tasks | task | reminders | remind
+// raqib day | log | unlog | tasks | task | reminders | remind (health and exercise ones are in healthCli.ts and exerciseCli.ts)
 //
 // The same records the window edits, from the command line, so you (or Claude,
 // in a chat) can review a day and fill it in without opening the window. Writes
@@ -10,6 +10,8 @@ import { parseLocalDate } from './dates.ts';
 import type { BlockOutcome } from './dayPlan.ts';
 import type { Checkin, CheckinPart, Entry, Goal, GoalResult, PlanBlock, Reminder, Task } from './journal.ts';
 import { dbPath, id, openJournal, options, parseDay, UsageError } from './cliShared.ts';
+import { EXERCISE_COMMANDS, EXERCISE_USAGE } from './exerciseCli.ts';
+import { HEALTH_COMMANDS, HEALTH_USAGE } from './healthCli.ts';
 import { PROJECT_COMMANDS, PROJECTS_USAGE } from './projectsCli.ts';
 import type { ReminderSchedule } from './planner.ts';
 import { dayKey, minutesOf, nextSlot, parseSchedule } from './planner.ts';
@@ -37,6 +39,8 @@ export const JOURNAL_USAGE = `  raqib day [date] [--json]            Your day: s
   raqib remind add "text" --at 09:00,21:00 [--days ...]
                                       Add a reminder (also: remind on|off|rm <id>)
 ${PROJECTS_USAGE}
+${HEALTH_USAGE}
+${EXERCISE_USAGE}
   (date: YYYY-MM-DD, today, yesterday, or tomorrow; default today)`;
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -549,6 +553,8 @@ const COMMANDS: Record<string, (args: string[]) => number | Promise<number>> = {
   reminders,
   remind,
   ...PROJECT_COMMANDS,
+  ...HEALTH_COMMANDS,
+  ...EXERCISE_COMMANDS,
 };
 
 export function isJournalCommand(command: string | undefined): boolean {

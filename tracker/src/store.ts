@@ -201,6 +201,63 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_plan_day ON plan_blocks (day);
   `,
+  // Health: what you ate each day, and your weight and body measurements (one a day).
+  `
+  CREATE TABLE food_entries (
+    id         INTEGER PRIMARY KEY,
+    day        TEXT NOT NULL,
+    meal       TEXT NOT NULL CHECK (meal IN ('breakfast', 'lunch', 'dinner', 'snack')),
+    name       TEXT NOT NULL,
+    calories   REAL,
+    protein_g  REAL,
+    carbs_g    REAL,
+    fat_g      REAL,
+    created_ms INTEGER NOT NULL
+  );
+  CREATE INDEX idx_food_day ON food_entries (day);
+
+  CREATE TABLE weigh_ins (
+    day          TEXT PRIMARY KEY,
+    weight_kg    REAL NOT NULL CHECK (weight_kg > 0),
+    body_fat_pct REAL,
+    waist_cm     REAL,
+    updated_ms   INTEGER NOT NULL
+  );
+  `,
+  // Exercise: workouts, logged by hand or imported (Caliber), and the sets in each.
+  // An import names each workout by the app's own id, so importing again adds nothing twice.
+  `
+  CREATE TABLE workouts (
+    id          INTEGER PRIMARY KEY,
+    day         TEXT NOT NULL,
+    start_ms    INTEGER,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'strength',
+    minutes     REAL,
+    calories    REAL,
+    note        TEXT,
+    source      TEXT NOT NULL DEFAULT 'manual',
+    external_id TEXT,
+    created_ms  INTEGER NOT NULL
+  );
+  CREATE INDEX idx_workouts_day ON workouts (day);
+  CREATE UNIQUE INDEX idx_workouts_external ON workouts (source, external_id) WHERE external_id IS NOT NULL;
+
+  CREATE TABLE workout_sets (
+    id         INTEGER PRIMARY KEY,
+    workout_id INTEGER NOT NULL REFERENCES workouts (id),
+    position   INTEGER NOT NULL,
+    exercise   TEXT NOT NULL,
+    set_no     INTEGER NOT NULL,
+    reps       INTEGER,
+    weight_kg  REAL,
+    rpe        REAL,
+    seconds    REAL,
+    distance_m REAL
+  );
+  CREATE INDEX idx_sets_workout ON workout_sets (workout_id);
+  CREATE INDEX idx_sets_exercise ON workout_sets (exercise COLLATE NOCASE);
+  `,
 ];
 
 /** Brings a database up to the newest schema. Safe to call from several connections. */

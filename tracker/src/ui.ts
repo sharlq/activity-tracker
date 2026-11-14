@@ -26,6 +26,8 @@ import { DEFAULT_SETTINGS, dayKey, jobWindow, mergeSettings, nextSlot, parseSche
 import type { ProjectWeek } from './projects.ts';
 import { pcTimeByProject, projectWeek } from './projects.ts';
 import { EventReader } from './reader.ts';
+import { exerciseRoutes } from './uiExercise.ts';
+import { healthRoutes } from './uiHealth.ts';
 import { projectRoutes } from './uiProjects.ts';
 import type { Category, DayFigures, Gap, LoggedDistraction, Report, Segment, Sleep, WeekTotals } from './report/index.ts';
 import {
@@ -71,10 +73,10 @@ const SECURITY_HEADERS = {
   'cache-control': 'no-store',
 };
 const COOKIE = 'raqib';
-const PAGES = new Set(['today', 'morning', 'evening', 'back', 'week', 'projects', 'reminders', 'settings']);
+const PAGES = new Set(['today', 'morning', 'evening', 'back', 'week', 'projects', 'health', 'reminders', 'settings']);
 
 /** Activities you might log for time away from the PC, besides the screen categories. */
-export const LIFE_CATEGORIES = ['sleep', 'meal', 'exercise', 'errand', 'commute', 'social', 'rest', 'prayer', 'chores', 'study'];
+export const LIFE_CATEGORIES = ['sleep', 'in bed', 'sleep routine', 'meal', 'exercise', 'errand', 'commute', 'social', 'rest', 'prayer', 'chores', 'study'];
 
 export function cookieValue(token: string): string {
   return createHash('sha256').update(`raqib-ui:${token}`).digest('hex');
@@ -670,7 +672,7 @@ export function createUi(deps: UiDeps) {
       const change: { mood?: number | null; energy?: number | null; note?: string | null } = {};
       const mood = rating(body['mood'], 'mood');
       const energy = rating(body['energy'], 'energy');
-      const note = clearableText(body['note'], 'Note', 1000);
+      const note = clearableText(body['note'], 'Note', 10_000);
       if (mood !== undefined) change.mood = mood;
       if (energy !== undefined) change.energy = energy;
       if (note !== undefined) change.note = note;
@@ -776,6 +778,8 @@ export function createUi(deps: UiDeps) {
       return send(response, 200, { sent: await deps.testProjectReminder() });
     }
 
+    if (await healthRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
+    if (await exerciseRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
     if (await projectRoutes(journal, method, route, url, request, response, dayKey(now()), (date) => pcTimeOn(deps, date))) return;
 
     throw new HttpError(404, 'not found');
