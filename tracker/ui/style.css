@@ -29,6 +29,9 @@
   --danger-soft: #fbe7e4;
   --good: #1f7a3d;
   --good-soft: #dcf2e2;
+  /* Charts: actual vs the plan's aim (validated for colour-blind separation on --panel). */
+  --chart-actual: #00897a;
+  --chart-aim: #b0711c;
   --focus-ring: #0f766e;
   --logo-teal: #0f766e;
   --logo-dawn: #e0a443;
@@ -90,6 +93,8 @@
     --danger-soft: #3b1d1a;
     --good: #6fd39a;
     --good-soft: #163522;
+    --chart-actual: #109e8f;
+    --chart-aim: #c0832a;
     --focus-ring: #5eead4;
     --logo-teal: #2dd4bf;
 
@@ -682,3 +687,67 @@ details.finished summary { cursor: pointer; margin-bottom: 12px; font-size: 11.5
 .card > header.workout-head p { margin: 0; text-align: left; }
 .record { text-align: right; white-space: nowrap; }
 pre.code { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; margin: 8px 0; font-size: 12.5px; overflow-x: auto; }
+
+/* Training plan ------------------------------------------------------------ */
+.time-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.time-chart .series { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.series.actual { stroke: var(--chart-actual); }
+.series.aim { stroke: var(--chart-aim); }
+.series.raw { stroke: none; }
+.series.dashed { stroke-dasharray: 6 5; }
+.time-chart .band { fill: var(--chart-actual); opacity: 0.14; }
+.time-chart .dot { stroke: var(--panel); stroke-width: 2; }
+.dot.actual { fill: var(--chart-actual); }
+.dot.raw { fill: var(--ink-muted); opacity: 0.55; }
+.dot.faded { opacity: 0.35; }
+.time-chart .marker { stroke: var(--panel); stroke-width: 2; }
+.marker.aim { fill: var(--chart-aim); }
+.marker.reset { fill: var(--panel); stroke: var(--ink); stroke-width: 2; }
+.time-chart .crosshair { stroke: var(--line-control); stroke-width: 1; }
+.time-chart .wbar { fill: var(--line-control); opacity: 0.45; }
+.time-chart .wbar.recent { fill: var(--chart-actual); opacity: 1; }
+.time-chart .wbar.recent.low { fill: var(--chart-aim); }
+.time-chart .goal-line { stroke-dasharray: 4 4; }
+.time-chart .low-mark { fill: var(--ink); font-weight: 700; }
+.time-chart .hit { fill: transparent; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12.5px; color: var(--ink-muted); }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend .key { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--chart-actual); }
+.chart-legend .key.aim { border-top-color: var(--chart-aim); }
+.chart-legend .key.dashed { border-top-style: dashed; }
+.chart-legend .key.band { height: 10px; border: 0; background: var(--chart-actual); opacity: 0.18; border-radius: 2px; }
+.chart-legend .key.raw { width: 8px; height: 8px; border: 0; border-radius: 50%; background: var(--ink-muted); opacity: 0.6; }
+.chart-legend .key.diamond { width: 9px; height: 9px; border: 0; background: var(--chart-aim); transform: rotate(45deg); }
+.chart-legend .key.square { width: 9px; height: 9px; border: 2px solid var(--ink); border-radius: 2px; }
+.spark { display: block; }
+.spark .series { fill: none; stroke-width: 1.5; }
+.spark .dot { fill: var(--chart-actual); }
+.table-wrap { overflow-x: auto; }
+.training-table td { vertical-align: middle; }
+.goal-table td input { width: 64px; }
+.goal-table th, .goal-table td { padding-left: 3px; padding-right: 3px; }
+.flag-line { font-size: 12px; }
+.plan-table tr.faded td { opacity: 0.55; }
+.plan-ex > header { align-items: flex-start; }
+.plan-ex h2 a { color: inherit; text-decoration: none; }
+.plan-ex h2 a:hover { text-decoration: underline; }
+.plan-ex .pos { color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.plan-ex .tags { margin-top: 6px; gap: 6px; }
+.plan-ex .suggest { text-align: right; }
+.plan-ex .suggest .big { font-size: 24px; font-weight: 650; line-height: 30px; white-space: nowrap; }
+.plan-ex .logged { margin: 10px 0 2px; }
+.plan-ex .log-row { margin-top: 12px; align-items: flex-end; }
+.plan-ex.done { border-color: var(--good); }
+.plan-ex .weight-in { width: 96px; }
+.plan-ex .verdict { font-size: 13px; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+.stepper .btn { font-size: 18px; }
+.stepper-value { min-width: 34px; text-align: center; font-size: 18px; font-weight: 650; }
+.chip-x { border: 0; background: transparent; color: var(--ink-muted); cursor: pointer; font-size: 15px; padding: 0 0 0 4px; line-height: 1; }
+.chip-x:hover { color: var(--danger); }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-muted); height: 34px; }
+.badge.accent { white-space: nowrap; }
+@media (max-width: 640px) {
+  .plan-ex > header { flex-direction: column; }
+  .plan-ex .suggest { text-align: left; }
+}

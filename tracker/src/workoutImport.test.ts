@@ -132,3 +132,65 @@ describe("Caliber's own export", () => {
     assert.match(result.flagged[0]?.why ?? '', /30 hours/);
   });
 });
+
+describe('importing history for the plan', () => {
+  const head = '"Date","Title","Exercise","Set #","Reps","Weight","Time"';
+  const row = (day: string, exercise: string, set: number, reps: number, lb: number) => `"${day}","Arms","${exercise}","${set}","${reps}","${lb}",""`;
+
+  it('turns 187.393 lb back into 85 kg, to the nearest 0.5', async () => {
+    const { kgFromLb } = await import('./workoutImport.ts');
+    assert.equal(kgFromLb(187.393), 85);
+    assert.equal(kgFromLb(49.6040), 22.5);
+    assert.equal(kgFromLb(37.4786), 17);
+    const result = importWorkouts([head, row('2026-11-09', 'Barbell Squat', 1, 8, 187.393)].join('\n'));
+    assert.equal(result.workouts[0]?.exercises[0]?.sets[0]?.weight, 85);
+  });
+
+  it('flags a set far heavier than usual, and added load on a bodyweight exercise', () => {
+    const lines = [head];
+    ['2026-10-01', '2026-10-05', '2026-10-09', '2026-10-13'].forEach((d, i) => lines.push(row(d, 'Dumbbell Preacher Curl', 1, 10, i === 2 ? 275.578 : 27.5578)));
+    ['2026-10-01', '2026-10-05', '2026-10-09'].forEach((d, i) => lines.push(row(d, 'Pull-Up', 1, 8, i === 1 ? 105.822 : 0)));
+    const result = importWorkouts(lines.join('\n'));
+    assert.deepEqual(result.flaggedSets.map((f) => [f.day, f.exercise, f.weight]), [['2026-10-05', 'Pull-Up', 48], ['2026-10-09', 'Dumbbell Preacher Curl', 125]]);
+    const curl = result.workouts.find((w) => w.workout.day === '2026-10-09')?.exercises.find((e) => e.name === 'Dumbbell Preacher Curl');
+    assert.equal(curl?.sets[0]?.flag, 'outlier');
+  });
+
+  it('notices sessions copied forward 3+ times in a row', () => {
+    const lines = [head];
+    ['2026-10-01', '2026-10-05', '2026-10-09', '2026-10-13'].forEach((d) => [1, 2].forEach((n) => lines.push(row(d, 'Barbell Squat', n, 8, 187.393))));
+    const result = importWorkouts(lines.join('\n'));
+    assert.deepEqual(result.copied, [{ exercise: 'Barbell Squat', sessions: 3, days: ['2026-10-05', '2026-10-09', '2026-10-13'] }]);
+    assert.match(result.warnings.join(' '), /copied forward/);
+  });
+
+  it('adds nothing twice when the same file is imported again', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { Journal } = await import('./journal.ts');
+    const { planImport } = await import('./workoutImport.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'raqib-import-'));
+    const journal = new Journal(join(dir, 'data.db'));
+    try {
+      const file = [head, row('2026-11-09', 'Barbell Squat', 1, 8, 187.393), row('2026-11-09', 'Barbell Squat', 2, 8, 187.393), row('2026-11-11', 'Barbell Squat', 1, 9, 187.393)].join('\n');
+      const first = planImport(journal, importWorkouts(file).workouts);
+      journal.saveImported([...first.fresh, ...first.changed]);
+      const again = planImport(journal, importWorkouts(file).workouts);
+      assert.deepEqual([again.fresh.length, again.changed.length, again.unchanged], [0, 0, 2]);
+      journal.saveImported([...again.fresh, ...again.changed]);
+      assert.equal(journal.trainingSets(['barbell squat']).length, 3);
+      assert.equal(journal.trainingSets(['barbell squat'])[0]?.weight, 85);
+    } finally {
+      journal.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('matches exercises to the plan by name or alias', async () => {
+    const { planMatch } = await import('./workoutImport.ts');
+    const { planned, unplanned } = planMatch(['Dumbbell Shoulder Press', 'barbell squat', 'Dead hang'], [{ name: 'DB Shoulder Press', aliases: ['Dumbbell Shoulder Press'] }, { name: 'Barbell Squat', aliases: [] }]);
+    assert.deepEqual([...planned], [['Dumbbell Shoulder Press', 'DB Shoulder Press'], ['barbell squat', 'Barbell Squat']]);
+    assert.deepEqual(unplanned, ['Dead hang']);
+  });
+});

@@ -10,7 +10,7 @@ import { parseLocalDate } from './dates.ts';
 import type { BlockOutcome } from './dayPlan.ts';
 import type { Checkin, CheckinPart, Entry, Goal, GoalResult, PlanBlock, Reminder, Task } from './journal.ts';
 import { dbPath, id, openJournal, options, parseDay, UsageError } from './cliShared.ts';
-import { EXERCISE_COMMANDS, EXERCISE_USAGE } from './exerciseCli.ts';
+import { EXERCISE_COMMANDS, EXERCISE_USAGE, PLAN_USAGE } from './exerciseCli.ts';
 import { HEALTH_COMMANDS, HEALTH_USAGE } from './healthCli.ts';
 import { PROJECT_COMMANDS, PROJECTS_USAGE } from './projectsCli.ts';
 import type { ReminderSchedule } from './planner.ts';
@@ -41,6 +41,7 @@ export const JOURNAL_USAGE = `  raqib day [date] [--json]            Your day: s
 ${PROJECTS_USAGE}
 ${HEALTH_USAGE}
 ${EXERCISE_USAGE}
+${PLAN_USAGE}
   (date: YYYY-MM-DD, today, yesterday, or tomorrow; default today)`;
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });

@@ -12,7 +12,9 @@ import { minutesOf } from './planner.ts';
 import { parseLocalDate } from './dates.ts';
 import type { ExerciseView } from './uiExercise.ts';
 import { buildExercise, workoutBody } from './uiExercise.ts';
-import { importWorkouts, planImport } from './workoutImport.ts';
+import { importWorkouts, planImport, planMatch } from './workoutImport.ts';
+import { weightLabel } from './progression.ts';
+import { dashboard, nextPlanDay, planStates, todayView } from './trainingPlan.ts';
 
 export const EXERCISE_USAGE = `  raqib exercise [date] [--json]       The day's workouts (with ids), the last 7 days, and records per exercise
   raqib workout add "Push day" [--kind strength|run|walk|cycle|swim|sport|other] [--min 55] [--kcal 300]
@@ -142,6 +144,12 @@ function importFile(args: string[]): number {
       if (sets || result.columns.weight) console.log(`  Weights: ${result.unit === 'per row' ? 'unit given on each row' : result.unit === 'lb' ? 'pounds, saved as kg' : 'kg'}`);
       for (const w of result.warnings) console.log(`  Warning: ${w}`);
       for (const f of result.flagged) console.log(`  Held back: line ${f.row}, ${f.day} ${f.name}: ${f.why}`);
+      for (const f of result.flaggedSets.slice(0, 10)) console.log(`  Flagged (imported, left out of the plan until checked): ${f.day} ${f.exercise} ${f.reps ?? '?'} × ${f.weight} kg: ${f.why}`);
+      if (result.flaggedSets.length > 10) console.log(`    … and ${result.flaggedSets.length - 10} more flagged set(s)`);
+      if (exercises.size) {
+        const { planned, unplanned } = planMatch([...new Set(workouts.flatMap((w) => w.exercises.map((e) => e.name)))], journal.planExercises());
+        console.log(`  In the plan: ${planned.size} exercise(s)${[...planned].some(([a, b]) => a !== b) ? ` (${[...planned].filter(([a, b]) => a !== b).map(([a, b]) => `${a} → ${b}`).join(', ')})` : ''}; kept as history only: ${unplanned.length}`);
+      }
       if (result.skippedCount) console.log(`  Skipped ${result.skippedCount} row(s):\n${result.skipped.map((s) => `    line ${s.row}: ${s.why}`).join('\n')}`);
       console.log(`  ${plan.fresh.length} new, ${plan.changed.length} changed since the last import (their sets will be replaced), ${plan.unchanged} already up to date`);
       for (const w of [...plan.changed, ...plan.fresh].slice(0, 3)) {
@@ -227,4 +235,64 @@ function workout(args: string[]): number {
   }
 }
 
-export const EXERCISE_COMMANDS: Record<string, (args: string[]) => number> = { exercise, workout };
+// ------------------------------------------------------------------ the training plan
+
+function plan(args: string[]): number {
+  const { values, flags, rest } = options(args, ['date', 'day'], ['json']);
+  const [action] = rest;
+  const date = parseDay(values['date']);
+  const journal = openJournal();
+  try {
+    if (!action || action === 'today') {
+      const days = journal.planDays();
+      const asked = values['day'];
+      const dayId = asked ? days.find((d) => d.name.toLowerCase().replace(/\s+/g, '') === asked.toLowerCase().replace(/\s+/g, '') || String(d.id) === asked)?.id : nextPlanDay(journal);
+      if (!dayId) throw new UsageError(`No plan day "${asked}". Days: ${days.map((d) => d.name).join(', ')}`);
+      const view = todayView(journal, date, dayId);
+      if (!view) throw new UsageError('No such plan day');
+      if (flags.has('json')) return console.log(JSON.stringify(view, (k, v) => (k === 'sessions' ? undefined : v), 2)), 0;
+      console.log(`${view.day.name} on ${date}${view.day.note ? ` (${view.day.note})` : ''}`);
+      for (const e of view.exercises) {
+        const s = e.state;
+        const sug = s.suggestion;
+        const beat = sug.beat ? `, beat ${sug.beat.join('/')}` : '';
+        const later = s.exercise.laterSlot ? ' [later slot: lower target]' : '';
+        console.log(`  ${s.exercise.position}. ${s.exercise.name}: ${s.suggestedLabel}, ${s.exercise.sets} × ${s.exercise.repMin}–${s.exercise.repMax}${beat}${later}`);
+        if (sug.verdict && sug.last) console.log(`     last (${sug.last.day}): ${weightLabel(sug.last.weight, s.rule)} × ${sug.last.reps.join('/')} → ${sug.verdict.message}`);
+        if (e.logged.length) console.log(`     today: ${e.logged.map((x) => `${x.reps}@${weightLabel(x.weight ?? 0, s.rule)}`).join(', ')}${e.now ? ` → ${e.now.message}` : ''}`);
+        for (const f of s.flags) console.log(`     ! ${f.message}`);
+      }
+      return 0;
+    }
+    if (action === 'overview') {
+      const { states } = planStates(journal, date);
+      if (flags.has('json')) return console.log(JSON.stringify(states, (k, v) => (k === 'sessions' ? undefined : v), 2)), 0;
+      for (const s of states) {
+        const p = s.progress;
+        console.log(`${s.day.padEnd(8)} ${s.exercise.name.padEnd(40)} ${(s.currentLabel ?? '-').padEnd(16)} goal ${p ? `${weightLabel(p.goal.weight, s.rule)} by ${p.goal.day} (${Math.round(p.ratio * 100)}%, ${p.status})` : '-'}${s.flags.length ? `  ! ${s.flags.map((f) => f.kind).join(', ')}` : ''}`);
+      }
+      return 0;
+    }
+    if (action === 'progress') {
+      const d = dashboard(journal, date);
+      if (flags.has('json')) return console.log(JSON.stringify(d, null, 2)), 0;
+      const recent = d.weeks.filter((w) => w.recent);
+      console.log(`Sessions a week, last 12: ${recent.map((w) => (w.low ? `${w.sessions}!` : String(w.sessions))).join(' ')}  (! under 3)`);
+      console.log(`On track: ${d.onTrack.share === null ? '-' : `${Math.round(d.onTrack.share * 100)}%`} of ${d.onTrack.counted}${d.onTrack.behind.length ? `; behind: ${d.onTrack.behind.join(', ')}` : ''}`);
+      for (const q of d.quarters) console.log(`  ${q.from} → ${q.to}${q.partial ? ' (so far)' : ''}: median ${q.change === null ? '-' : `${q.change > 0 ? '+' : ''}${q.change}%`}${q.vsPrevious !== null ? ` (${q.vsPrevious > 0 ? '+' : ''}${q.vsPrevious} vs the quarter before)` : ''}`);
+      if (d.body.targetToday !== null) console.log(`Bodyweight target today: ${d.body.targetToday} kg${d.body.difference !== null ? `, 7-day average ${d.body.difference > 0 ? '+' : ''}${d.body.difference} kg from it` : ''}`);
+      for (const f of d.flags) console.log(`! ${f.message}`);
+      if (d.stalled.length) console.log(`Stalled: ${d.stalled.join(', ')}`);
+      return 0;
+    }
+    throw new UsageError('Usage: raqib plan [today] [--day "Upper A"] | plan overview | plan progress [--date D] [--json]');
+  } finally {
+    journal.close();
+  }
+}
+
+export const PLAN_USAGE = `  raqib plan [--day "Upper A"] [--date D] [--json]  The next plan day's exercises: weight to use, reps to beat, verdicts
+  raqib plan overview                    Every planned exercise: current weight, next goal, on track or behind, stalls
+  raqib plan progress                    Sessions a week, % on track, quarterly change, bodyweight against target`;
+
+export const EXERCISE_COMMANDS: Record<string, (args: string[]) => number> = { exercise, workout, plan };

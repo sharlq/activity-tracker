@@ -73,6 +73,7 @@ export function weighInBody(dayValue: string, body: unknown): Omit<WeighIn, 'at'
     weight: amount(raw['weight'], 'Weight', 500, { required: true, min: 1 }) as number,
     bodyFat: amount(raw['bodyFat'], 'Body fat', 80),
     waist: amount(raw['waist'], 'Waist', 300),
+    ...(raw['note'] === undefined ? {} : { note: raw['note'] === null || raw['note'] === '' ? null : String(raw['note']).trim().slice(0, 2000) }),
   };
 }
 

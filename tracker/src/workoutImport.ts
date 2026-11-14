@@ -6,6 +6,7 @@
 // date, time, and name), so importing the same file again adds nothing twice.
 import { parseLocalDate } from './dates.ts';
 import { LB_TO_KG } from './exercise.ts';
+import { copiedRuns, median } from './progression.ts';
 import type { Journal, NewSet, NewWorkout, WorkoutKind } from './journal.ts';
 import { WORKOUT_KINDS } from './journal.ts';
 import { dayKey } from './planner.ts';
@@ -41,6 +42,11 @@ export interface Profile {
   columns: Partial<Record<Field, string>>;
   /** Weights in the file: Caliber writes pounds, even for kg users (85 kg → 187.393). */
   units?: 'kg' | 'lb';
+  /**
+   * The pounds were kg to begin with, so they go back by ÷ 2.20462 to the nearest 0.5 kg
+   * (187.393 → 85, not 85.0 off by a rounding).
+   */
+  fromKg?: boolean;
   /** A workout's duration column counts seconds, not minutes. */
   minutesIn?: 'seconds';
   /** Put before each workout's "date:title" id, to keep two exports' ids apart. */
@@ -56,6 +62,7 @@ export const PROFILES: Profile[] = [
     headers: ['date', 'title', 'exercise', 'set', 'reps', 'weight', 'time'],
     columns: { date: 'date', workout: 'title', exercise: 'exercise', setNo: 'set', reps: 'reps', weight: 'weight', seconds: 'time' },
     units: 'lb',
+    fromKg: true,
     idPrefix: '',
   },
   {
@@ -73,6 +80,15 @@ export const PROFILES: Profile[] = [
 /** Longer than this, a workout is more likely a typo (108000 s for 1800) and isn't imported as is. */
 export const MAX_WORKOUT_MINUTES = 6 * 60;
 
+/** A set heavier than this many times the exercise's usual (median) weight is likely a typo. */
+export const OUTLIER_TIMES = 3;
+/** On an exercise usually done at bodyweight (median 0), added load from here up looks like your bodyweight typed in. */
+export const BODYWEIGHT_SLIP_KG = 20;
+export const KG_PER_LB = 2.20462;
+
+/** Pounds that were kg, back to kg to the nearest 0.5. */
+export const kgFromLb = (lb: number) => Math.round((lb / KG_PER_LB) * 2) / 2;
+
 export interface ImportedWorkout {
   workout: NewWorkout;
   /** Exercises in the order first seen, each with its sets. */
@@ -86,6 +102,10 @@ export interface ImportResult {
   skippedCount: number;
   /** Rows held back because they look wrong (a 30-hour workout), all of them. */
   flagged: { row: number; day: string; name: string; why: string }[];
+  /** Sets imported but flagged as likely typos (left out of the plan until checked). */
+  flaggedSets: { day: string; exercise: string; reps: number | null; weight: number; why: string }[];
+  /** Exercises with sessions that look copied forward by the old app (3+ identical in a row). */
+  copied: { exercise: string; sessions: number; days: string[] }[];
   /** The known layout the file was read as, or null for a guess from the headers. */
   profile: string | null;
   /** Which header each field was read from. */
@@ -333,7 +353,7 @@ export function importWorkouts(text: string, { file = '', source: sourceOption, 
     const reps = numberOf(cell(row, 'reps'));
     let weight = numberOf(cell(row, 'weight'));
     const rowUnit = unit === 'per row' ? (/lb/i.test(cell(row, 'unit')) ? 'lb' : 'kg') : unit;
-    if (weight !== null && rowUnit === 'lb') weight = Math.round((weight * LB_TO_KG) * 10) / 10;
+    if (weight !== null && rowUnit === 'lb') weight = profile?.fromKg && !units ? kgFromLb(weight) : Math.round((weight * LB_TO_KG) * 10) / 10;
     let distance = numberOf(cell(row, 'distance'));
     const distanceHeader = columns.distance ? key(columns.distance) : '';
     if (distance !== null && /km$/.test(distanceHeader)) distance *= 1000;
@@ -360,7 +380,66 @@ export function importWorkouts(text: string, { file = '', source: sourceOption, 
     warnings.push(`Some dates could be read either way (like 03/04): read as ${dateOrder === 'mdy' ? 'month/day' : 'day/month'}. Pass --dates ${dateOrder === 'mdy' ? 'dmy' : 'mdy'} if that's wrong.`);
   }
   if (distanceIgnored) warnings.push('Some sessions have a distance, which isn\'t imported yet (its unit isn\'t known).');
-  return { workouts, skipped, skippedCount, flagged, profile: profile?.name ?? null, columns, unit, warnings };
+  const flaggedSets = flagOutliers(workouts);
+  const copied = findCopied(workouts);
+  if (copied.length) warnings.push(`${copied.reduce((n, c) => n + c.sessions, 0)} session(s) of ${copied.length} exercise(s) are the same as the session before, 3+ times in a row: maybe copied forward by the old app. They're imported, but don't count toward stall flags.`);
+  return { workouts, skipped, skippedCount, flagged, flaggedSets, copied, profile: profile?.name ?? null, columns, unit, warnings };
+}
+
+/** Flags sets far heavier than the exercise's usual weight in the file. */
+export function flagOutliers(workouts: readonly ImportedWorkout[]): ImportResult['flaggedSets'] {
+  const weights = new Map<string, number[]>();
+  for (const w of workouts) for (const e of w.exercises) for (const s of e.sets) if (s.reps !== null || s.weight !== null) weights.set(e.name.toLowerCase(), [...(weights.get(e.name.toLowerCase()) ?? []), s.weight ?? 0]);
+  const out: ImportResult['flaggedSets'] = [];
+  for (const w of workouts) {
+    for (const e of w.exercises) {
+      const usual = median(weights.get(e.name.toLowerCase()) ?? []) ?? 0;
+      for (const s of e.sets) {
+        if (s.weight === null) continue;
+        const why = usual > 0 && s.weight > usual * OUTLIER_TIMES
+          ? `${s.weight} kg is over ${OUTLIER_TIMES}× the usual ${usual} kg: a typo?`
+          : usual === 0 && s.weight >= BODYWEIGHT_SLIP_KG ? `${s.weight} kg added on an exercise usually done at bodyweight: was it your bodyweight?` : null;
+        if (why) {
+          s.flag = 'outlier';
+          out.push({ day: w.workout.day, exercise: e.name, reps: s.reps, weight: s.weight, why });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Per exercise, sessions identical to the one before 3+ times in a row. */
+export function findCopied(workouts: readonly ImportedWorkout[]): ImportResult['copied'] {
+  const byExercise = new Map<string, { name: string; sessions: { day: string; weight: number; reps: number[] }[] }>();
+  const ordered = [...workouts].sort((a, b) => a.workout.day.localeCompare(b.workout.day));
+  for (const w of ordered) {
+    for (const e of w.exercises) {
+      const sets = e.sets.filter((s) => s.reps !== null && !s.flag);
+      if (!sets.length) continue;
+      const weight = Math.max(...sets.map((s) => s.weight ?? 0));
+      const entry = byExercise.get(e.name.toLowerCase()) ?? { name: e.name, sessions: [] };
+      entry.sessions.push({ day: w.workout.day, weight, reps: sets.filter((s) => (s.weight ?? 0) === weight).map((s) => s.reps as number) });
+      byExercise.set(e.name.toLowerCase(), entry);
+    }
+  }
+  return [...byExercise.values()].flatMap(({ name, sessions }) => {
+    const copies = [...copiedRuns(sessions)];
+    return copies.length ? [{ exercise: name, sessions: copies.length, days: copies.map((i) => (sessions[i] as { day: string }).day) }] : [];
+  });
+}
+
+/** Which exercises in the file are in the plan (by name or alias), and which are history only. */
+export function planMatch(names: readonly string[], plan: readonly { name: string; aliases: string[] }[]): { planned: Map<string, string>; unplanned: string[] } {
+  const known = new Map(plan.flatMap((p) => [p.name, ...p.aliases].map((n) => [n.toLowerCase(), p.name] as const)));
+  const planned = new Map<string, string>();
+  const unplanned: string[] = [];
+  for (const n of new Set(names)) {
+    const p = known.get(n.toLowerCase());
+    if (p) planned.set(n, p);
+    else unplanned.push(n);
+  }
+  return { planned, unplanned };
 }
 
 const clockOf = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
@@ -368,7 +447,7 @@ const clockOf = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 /** Whether an imported workout already saved holds just what the file says. */
 export function sameAsSaved(saved: { minutes: number | null; calories: number | null; name: string; kind: string; sets: (NewSet & { exercise: string })[] }, imported: ImportedWorkout): boolean {
   const flat = imported.exercises.flatMap((e) => e.sets.map((s) => ({ ...s, exercise: e.name })));
-  const fields = (s: NewSet & { exercise: string }) => [s.exercise.toLowerCase(), s.reps, s.weight, s.rpe, s.seconds, s.distance].join('|');
+  const fields = (s: NewSet & { exercise: string }) => [s.exercise.toLowerCase(), s.reps, s.weight, s.rpe, s.seconds, s.distance, s.flag === 'kept' ? 'outlier' : (s.flag ?? '')].join('|');
   return (
     saved.minutes === imported.workout.minutes &&
     saved.calories === imported.workout.calories &&

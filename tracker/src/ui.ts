@@ -28,6 +28,7 @@ import { pcTimeByProject, projectWeek } from './projects.ts';
 import { EventReader } from './reader.ts';
 import { exerciseRoutes } from './uiExercise.ts';
 import { healthRoutes } from './uiHealth.ts';
+import { trainingRoutes } from './uiTraining.ts';
 import { projectRoutes } from './uiProjects.ts';
 import type { Category, DayFigures, Gap, LoggedDistraction, Report, Segment, Sleep, WeekTotals } from './report/index.ts';
 import {
@@ -780,6 +781,7 @@ export function createUi(deps: UiDeps) {
 
     if (await healthRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
     if (await exerciseRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
+    if (await trainingRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
     if (await projectRoutes(journal, method, route, url, request, response, dayKey(now()), (date) => pcTimeOn(deps, date))) return;
 
     throw new HttpError(404, 'not found');

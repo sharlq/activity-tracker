@@ -2,6 +2,7 @@
 // which is why 'setEnd' can target MAX(id) and the store needs no extra state.
 import Database from 'better-sqlite3';
 import type { Activity, Op, OpenEvent, WindowInfo } from './merger.ts';
+import { seedSql } from './trainingSeed.ts';
 
 const MIGRATIONS: string[] = [
   `
@@ -257,6 +258,70 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_sets_workout ON workout_sets (workout_id);
   CREATE INDEX idx_sets_exercise ON workout_sets (exercise COLLATE NOCASE);
+  `,
+  // The training plan: days of a split, the exercises in each (in order, with sets, rep
+  // range, weight step, and whether it comes after a muscle was already worked), a goal
+  // weight per exercise at each checkpoint, and bodyweight targets. Seeded once from
+  // trainingSeed.ts, then edited here. Per exercise in a workout: a form reset and a note.
+  // A set can be flagged as a likely typo (an import's 125 kg among 12.5 kg sets).
+  `
+  CREATE TABLE plan_days (
+    id       INTEGER PRIMARY KEY,
+    name     TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    note     TEXT
+  );
+
+  CREATE TABLE plan_exercises (
+    id         INTEGER PRIMARY KEY,
+    day_id     INTEGER NOT NULL REFERENCES plan_days (id),
+    position   INTEGER NOT NULL,
+    name       TEXT NOT NULL,
+    aliases    TEXT NOT NULL DEFAULT '[]',
+    sets       INTEGER NOT NULL CHECK (sets BETWEEN 1 AND 10),
+    rep_min    INTEGER NOT NULL CHECK (rep_min >= 1),
+    rep_max    INTEGER NOT NULL CHECK (rep_max >= rep_min),
+    step_kg    REAL NOT NULL CHECK (step_kg > 0),
+    later_slot INTEGER NOT NULL DEFAULT 0,
+    per_hand   INTEGER NOT NULL DEFAULT 0,
+    bodyweight INTEGER NOT NULL DEFAULT 0,
+    note       TEXT,
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_ms INTEGER NOT NULL
+  );
+  CREATE INDEX idx_plan_exercises_day ON plan_exercises (day_id);
+
+  CREATE TABLE checkpoints (
+    day   TEXT PRIMARY KEY,
+    label TEXT NOT NULL
+  );
+
+  CREATE TABLE exercise_goals (
+    plan_exercise_id INTEGER NOT NULL REFERENCES plan_exercises (id),
+    day              TEXT NOT NULL,
+    weight_kg        REAL NOT NULL,
+    PRIMARY KEY (plan_exercise_id, day)
+  );
+
+  CREATE TABLE body_goals (
+    day       TEXT PRIMARY KEY,
+    weight_kg REAL NOT NULL,
+    lean_kg   REAL
+  );
+
+  CREATE TABLE exercise_logs (
+    workout_id INTEGER NOT NULL REFERENCES workouts (id),
+    exercise   TEXT NOT NULL COLLATE NOCASE,
+    form_reset INTEGER NOT NULL DEFAULT 0,
+    note       TEXT,
+    PRIMARY KEY (workout_id, exercise)
+  );
+
+  ALTER TABLE workouts ADD COLUMN plan_day_id INTEGER;
+  ALTER TABLE workout_sets ADD COLUMN flag TEXT;
+  ALTER TABLE weigh_ins ADD COLUMN note TEXT;
+
+  ${seedSql(Date.now())}
   `,
 ];
 
