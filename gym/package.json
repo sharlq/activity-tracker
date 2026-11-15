@@ -1,0 +1,23 @@
+{
+  "name": "raqib-gym",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "رقيب at the gym: today's plan, a set at a time, a rest timer, and the summary. Convex + Vite, hosted on Vercel.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p convex",
+    "convex": "convex dev",
+    "push-from-pc": "node --disable-warning=ExperimentalWarning scripts/pushFromPc.ts",
+    "check-parity": "node --disable-warning=ExperimentalWarning scripts/checkParity.ts"
+  },
+  "dependencies": {
+    "convex": "^1.50.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.8"
+  }
+}

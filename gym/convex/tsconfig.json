@@ -1,0 +1,20 @@
+{
+  // Convex's own typecheck of the functions. The shared engine lives in ../../tracker/src.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*", "../../tracker/src/trainingPlan.ts", "../../tracker/src/progression.ts", "../../tracker/src/trainingTypes.ts"],
+  "exclude": ["./_generated"]
+}

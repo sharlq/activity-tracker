@@ -1,7 +1,7 @@
 // The training plan put together: each planned exercise with its history as sessions, the
 // engine's verdict and suggestion, goal progress, and flags; plus the dashboard. Reads
-// from the journal and hands plain data to progression.ts, which decides everything.
-import type { Journal, PlanDay, PlanExercise, TrainingSet } from './journal.ts';
+// from the journal (or the gym app's own data) and hands plain data to progression.ts, which decides everything.
+import type { PlanDay, PlanExercise, TrainingSet, TrainingSource } from './trainingTypes.ts';
 import type { BodyFlag, Checkpoint, ExerciseRule, Flag, GoalProgress, Session, Suggestion, Verdict } from './progression.ts';
 import { bodyFlags, copiedRuns, estimated1RM, expectedOn, ffmi, flags, goalProgress, median, medianChange, quantile, rollingAverage, shiftDay, suggest, verdict, weightAsOf, weightLabel } from './progression.ts';
 
@@ -99,11 +99,11 @@ export function exerciseState(exercise: PlanExercise, dayName: string, sets: rea
   };
 }
 
-function load(journal: Journal, exercises: readonly PlanExercise[]): TrainingSet[] {
+function load(journal: TrainingSource, exercises: readonly PlanExercise[]): TrainingSet[] {
   return journal.trainingSets([...new Set(exercises.flatMap(namesOf).map((n) => n.toLowerCase()))]);
 }
 
-export function planStates(journal: Journal, today: string): { days: PlanDay[]; states: ExerciseState[] } {
+export function planStates(journal: TrainingSource, today: string): { days: PlanDay[]; states: ExerciseState[] } {
   const days = journal.planDays();
   const exercises = journal.planExercises();
   const sets = load(journal, exercises);
@@ -131,7 +131,7 @@ export interface TodayView {
   exercises: TodayExercise[];
 }
 
-export function todayView(journal: Journal, date: string, dayId: number): TodayView | null {
+export function todayView(journal: TrainingSource, date: string, dayId: number): TodayView | null {
   const days = journal.planDays();
   const day = days.find((d) => d.id === dayId);
   if (!day) return null;
@@ -162,7 +162,7 @@ export function todayView(journal: Journal, date: string, dayId: number): TodayV
 }
 
 /** The plan day to do next: the one after the last one logged, else the first. */
-export function nextPlanDay(journal: Journal): number | null {
+export function nextPlanDay(journal: TrainingSource): number | null {
   const days = journal.planDays();
   if (!days.length) return null;
   const { states } = planStates(journal, '9999-12-31');
@@ -204,7 +204,7 @@ const mondayOf = (day: string) => {
   return shiftDay(day, -((d.getUTCDay() + 6) % 7));
 };
 
-export function bodyView(journal: Journal, today: string): BodyView {
+export function bodyView(journal: TrainingSource, today: string): BodyView {
   const height = Number(journal.get('training.heightCm') ?? 172) || 172;
   const labels = new Map(journal.checkpoints().map((c) => [c.day, c.label]));
   const goals = journal.bodyGoals();
@@ -221,7 +221,7 @@ export function bodyView(journal: Journal, today: string): BodyView {
   };
 }
 
-export function dashboard(journal: Journal, today: string): Dashboard {
+export function dashboard(journal: TrainingSource, today: string): Dashboard {
   const { states } = planStates(journal, today);
   const checkpoints = journal.checkpoints();
 

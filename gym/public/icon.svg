@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="رقيب">
+  <!-- The Raqib mark: a crescent (the letter ر, the sweep of the day) cradling a still dot. -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#0f766e" />
+  <g transform="translate(128 128) scale(0.8) translate(-128 -128) translate(-13.36 0)">
+    <path d="M122.87 36.14A92 92 0 1 1 62.72 192.83A84 84 0 0 0 122.87 36.14Z" fill="#f6f1e4" />
+    <circle cx="132.76" cy="129.83" r="19" fill="#e0a443" />
+  </g>
+</svg>

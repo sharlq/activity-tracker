@@ -11,6 +11,8 @@ import type { Progress, Project, ProjectDay, ProjectOverview, ProjectStatus, Sub
 import { overview } from './projects.ts';
 import type { ScreenSource } from './screens.ts';
 import { migrate } from './store.ts';
+import type { BodyGoal, CheckpointDay, PlanDay, PlanExercise, TrainingSet, WeighIn } from './trainingTypes.ts';
+export type { BodyGoal, CheckpointDay, PlanDay, PlanExercise, TrainingSet, TrainingSource, WeighIn } from './trainingTypes.ts';
 
 export interface AudioSource {
   processName: string;
@@ -120,15 +122,6 @@ export interface FoodEntry {
 }
 export type NewFood = Omit<FoodEntry, 'id' | 'at'>;
 
-/** Your weight on a day, with body fat and waist if you measured them. */
-export interface WeighIn {
-  day: string;
-  weight: number;
-  bodyFat: number | null;
-  waist: number | null;
-  note?: string | null;
-  at: number;
-}
 
 type FoodRow = {
   id: number;
@@ -205,60 +198,11 @@ export interface ExerciseHistory {
 
 // Training plan -------------------------------------------------------------
 
-export interface PlanDay {
-  id: number;
-  name: string;
-  position: number;
-  note: string | null;
-}
 
-export interface PlanExercise {
-  id: number;
-  dayId: number;
-  position: number;
-  name: string;
-  /** Other names it goes by in history (as an old app spelled it). */
-  aliases: string[];
-  sets: number;
-  repMin: number;
-  repMax: number;
-  step: number;
-  laterSlot: boolean;
-  perHand: boolean;
-  bodyweight: boolean;
-  note: string | null;
-  active: boolean;
-  /** Goal weight at each checkpoint, by its day. */
-  goals: { day: string; weight: number }[];
-}
 export type PlanExerciseChange = Partial<Omit<PlanExercise, 'id' | 'goals'>>;
 
-export interface CheckpointDay {
-  day: string;
-  label: string;
-}
 
-export interface BodyGoal {
-  day: string;
-  weight: number;
-  lean: number | null;
-}
 
-/** A set of a planned exercise, with the workout it was in: what the plan's history is built from. */
-export interface TrainingSet {
-  setId: number;
-  workoutId: number;
-  day: string;
-  planDayId: number | null;
-  source: string;
-  exercise: string;
-  setNo: number;
-  reps: number | null;
-  weight: number | null;
-  flag: string | null;
-  formReset: boolean;
-  note: string | null;
-}
 
 type PlanExerciseRow = {
   id: number; day_id: number; position: number; name: string; aliases: string; sets: number; rep_min: number; rep_max: number;
