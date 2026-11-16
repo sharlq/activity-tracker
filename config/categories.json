@@ -3,6 +3,7 @@
   "distraction": ["social media", "video", "news", "gaming", "game launcher"],
   "rules": [
     { "category": "meeting", "call": "*", "note": "Any time an app holds the microphone (Teams, Zoom, WhatsApp calls), whatever is in front" },
+    { "category": "entertainment", "domain": ["elif.news", "rezeroperfect.run"], "note": "Added in رقيب" },
 
     { "category": "gaming", "gaming": "game" },
     { "category": "game launcher", "gaming": "launcher" },

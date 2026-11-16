@@ -59,10 +59,10 @@ async function tagWindow(): Promise<void> {
 }
 
 /** Opens the window. The promise settles once it has its taskbar identity (or after a while). */
-export function openUrl(url: string, size: readonly [number, number] = [1180, 860]): Promise<void> {
+export function openUrl(url: string, size: readonly [number, number] = [1180, 860], { tag = true }: { tag?: boolean } = {}): Promise<void> {
   const browser = browserCandidates().find((path) => existsSync(path));
   if (browser) {
-    const tagged = tagWindow();
+    const tagged = tag ? tagWindow() : Promise.resolve();
     detached(browser, [`--app=${url}`, `--window-size=${size[0]},${size[1]}`]);
     return tagged;
   } else {

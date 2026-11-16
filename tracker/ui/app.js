@@ -165,7 +165,7 @@ const swatch = (category) => h('i', { class: `dot${COLORS[category] ? '' : ' log
 
 /** Quick answers for a gap: the label to log, the category it goes under, and its icon. */
 const QUICK = [
-  ['Sleep', 'sleep', 'sleep'], ['In bed', 'in bed', 'bed'], ['Sleep routine', 'sleep routine', 'routine'], ['Meal', 'meal', 'meal'], ['Out / errands', 'errand', 'errand'], ['Exercise', 'exercise', 'exercise'], ['Commute', 'commute', 'commute'],
+  ['Sleep', 'sleep', 'sleep'], ['In bed', 'in bed', 'bed'], ['Sleep routine', 'sleep routine', 'routine'], ['Pre shower', 'pre shower', 'drop'], ['Meal', 'meal', 'meal'], ['Out / errands', 'errand', 'errand'], ['Exercise', 'exercise', 'exercise'], ['Commute', 'commute', 'commute'],
   ['With people', 'social', 'social'], ['Prayer', 'prayer', 'prayer'], ['Rest', 'rest', 'rest'], ['Entertainment', 'entertainment', 'music'], ['Chores', 'chores', 'chores'], ['On my phone', 'social media', 'phone'],
 ];
 
@@ -745,39 +745,97 @@ function gapsCard(day, refresh, { title = 'Gaps to log', note } = {}) {
   );
 }
 
+function entryEditRow(day, e, refresh, done) {
+  const label = h('input', { type: 'text', dir: 'auto', value: e.label, list: 'life-labels', 'aria-label': 'What you did', maxlength: 200 });
+  const cats = [...new Set([...(day.entryCategories ?? []), ...(e.category ? [e.category] : [])])];
+  const category = h(
+    'select',
+    { 'aria-label': 'Category' },
+    h('option', { value: '' }, 'No category'),
+    cats.map((c) => h('option', { value: c, selected: c === e.category }, c)),
+  );
+  category.value = e.category ?? '';
+  const startInput = h('input', { type: 'time', value: clock(e.start), 'aria-label': 'From' });
+  const endInput = h('input', { type: 'time', value: clock(e.end), 'aria-label': 'Until' });
+  const initial = { start: startInput.value, end: endInput.value };
+  const save = oneAtATime(async () => {
+    const text = label.value.trim();
+    if (!text) {
+      label.focus();
+      say('Say what you did first', true);
+      return;
+    }
+    // Times left as they were keep their exact moment (and day, for entries that cross midnight).
+    const start = startInput.value === initial.start ? e.start : onDay(dayKey(e.start), startInput.value);
+    let end = endInput.value === initial.end ? e.end : onDay(dayKey(e.end), endInput.value);
+    if (end <= start) end = onDay(dayKey(start + 86400000), endInput.value);
+    try {
+      await api(`/entries/${e.id}`, { method: 'PUT', body: { start, end, label: text, category: category.value || null } });
+      say(`Updated: ${text}`);
+      await refresh();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  const row = h(
+    'li',
+    { class: 'entry-edit' },
+    h(
+      'div',
+      { class: 'gap-form' },
+      label, category, startInput, h('span', { class: 'to' }, 'to'), endInput,
+      h('button', { class: 'btn primary sm', onclick: save }, 'Save'),
+      h('button', { class: 'btn sm', onclick: done }, 'Cancel'),
+    ),
+  );
+  row.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && ev.target.tagName !== 'BUTTON') save();
+    if (ev.key === 'Escape') done();
+  });
+  return row;
+}
+
 function entriesCard(day, refresh) {
   const entries = day.report.entries;
+  const viewRow = (e) =>
+    h(
+      'li',
+      {},
+      h('i', { class: 'dot logged' }),
+      h('span', { class: 'time' }, span(e.start, e.end)),
+      h('span', { class: 'grow', dir: 'auto' }, e.label, e.category ? h('span', { class: 'time' }, ` · ${e.category}`) : null),
+      h('span', { class: 'time' }, duration(e.end - e.start)),
+      h('button', {
+        class: 'icon-btn edit',
+        title: 'Edit',
+        'aria-label': `Edit ${e.label}`,
+        onclick: (ev) => {
+          const li = ev.currentTarget.closest('li');
+          const back = () => editor.replaceWith(viewRow(e));
+          const editor = entryEditRow(day, e, refresh, back);
+          li.replaceWith(editor);
+          editor.querySelector('input')?.focus();
+        },
+      }, '✎'),
+      h('button', {
+        class: 'icon-btn',
+        title: 'Remove',
+        'aria-label': `Remove ${e.label}`,
+        onclick: async () => {
+          try {
+            await api(`/entries/${e.id}`, { method: 'DELETE' });
+            await refresh();
+          } catch (error) {
+            handle(error);
+          }
+        },
+      }, '×'),
+    );
   return card(
     'You logged',
     entries.length ? `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` : null,
     entries.length
-      ? h(
-          'ul',
-          { class: 'list' },
-          entries.map((e) =>
-            h(
-              'li',
-              {},
-              h('i', { class: 'dot logged' }),
-              h('span', { class: 'time' }, span(e.start, e.end)),
-              h('span', { class: 'grow' }, e.label, e.category ? h('span', { class: 'time' }, ` · ${e.category}`) : null),
-              h('span', { class: 'time' }, duration(e.end - e.start)),
-              h('button', {
-                class: 'icon-btn',
-                title: 'Remove',
-                'aria-label': `Remove ${e.label}`,
-                onclick: async () => {
-                  try {
-                    await api(`/entries/${e.id}`, { method: 'DELETE' });
-                    await refresh();
-                  } catch (error) {
-                    handle(error);
-                  }
-                },
-              }, '×'),
-            ),
-          ),
-        )
+      ? h('ul', { class: 'list' }, entries.map(viewRow))
       : h('p', { class: 'empty' }, 'Nothing logged yet. Fill in the gaps to see your whole day here.'),
   );
 }
@@ -1647,7 +1705,7 @@ async function morningPage() {
     ),
     top.length ? bars(top.map((t) => ({ name: t.category, ms: t.ms })), (i) => colorOf(i.name)) : h('p', { class: 'empty' }, 'Nothing was recorded yesterday.'),
     r.entries.length
-      ? h('p', { class: 'hint', style: { marginTop: '12px' } }, 'You logged: ', r.entries.map((e) => `${e.label} (${duration(e.end - e.start)})`).join(', '))
+      ? h('p', { class: 'hint', style: { marginTop: '12px' } }, 'You logged: ', r.entries.map((e) => `${e.label} (${duration(e.end - e.start)})`).join(', '), ' · ', h('a', { href: `#evening/${yesterday}` }, 'Edit'))
       : null,
   );
 
@@ -4205,8 +4263,16 @@ const PAGES = { today: todayPage, morning: morningPage, evening: eveningPage, ba
 const TITLES = { today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', projects: 'Projects', health: 'Health', exercise: 'Exercise', reminders: 'Reminders', settings: 'Settings' };
 let rendering = 0;
 
+// The demo profile (raqib demo) shows only the tabs chosen for it; null otherwise.
+let demoTabs = null;
+const allowed = (page) => !demoTabs || demoTabs.includes(page === 'exercise' ? 'health' : page);
+
 async function render() {
   const [page = 'today', date] = location.hash.replace(/^#/, '').split('/');
+  if (!allowed(PAGES[page] ? page : 'today')) {
+    location.replace(`#${demoTabs[0]}`);
+    return;
+  }
   const view = PAGES[page] ? page : 'today';
   for (const link of document.querySelectorAll('.nav')) link.classList.toggle('active', link.dataset.page === (view === 'exercise' ? 'health' : view));
   if (view !== 'today' && view !== 'evening' && view !== 'health') setTopnav(null);
@@ -4242,4 +4308,14 @@ setInterval(() => {
   const page = location.hash.replace(/^#/, '').split('/')[0] || 'today';
   if (page === 'today' && !document.querySelector('input:focus, select:focus, textarea:focus')) render();
 }, 60_000);
-render();
+api('/status')
+  .then((status) => {
+    if (!status?.demo) return;
+    demoTabs = status.demo.tabs;
+    document.body.classList.add('demo');
+    for (const link of document.querySelectorAll('.nav[data-page]')) link.hidden = !demoTabs.includes(link.dataset.page);
+    const brand = document.querySelector('.brand');
+    if (brand) brand.href = `#${demoTabs[0]}`;
+  })
+  .catch(() => {})
+  .finally(render);

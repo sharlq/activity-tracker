@@ -135,6 +135,8 @@ describe('phone multitasking', () => {
     assert.ok(isPhoneEntry({ label: 'على الجوال' }));
     assert.ok(!isPhoneEntry({ label: 'Phoned mum' }));
     assert.ok(!isPhoneEntry({ label: 'Meal' }));
+    assert.ok(!isPhoneEntry({ label: 'coffe sometimes picking phone most of it thinking' }));
+    assert.ok(isPhoneEntry({ label: 'On my phone and waiting for water to get warm' }));
   });
 
   it('counts phone time alongside active PC use, once even where entries overlap', () => {

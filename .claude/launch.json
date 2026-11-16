@@ -4,8 +4,29 @@
     {
       "name": "gym",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "gym", "run", "dev", "--", "--port", "5173", "--strictPort"],
+      "runtimeArgs": [
+        "--prefix",
+        "gym",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
       "port": 5173
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tracker/dist/main.js",
+        "demo",
+        "--reset",
+        "--no-open"
+      ],
+      "port": 5630,
+      "url": "http://raqib-demo.localhost:5630"
     }
   ]
 }

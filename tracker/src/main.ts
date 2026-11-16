@@ -27,6 +27,7 @@ const USAGE = `رقيب (Raqib), your activity tracker. Usage:
   raqib backup                        Copy the database now (one is also made each day)
   raqib token                         Show the API port and token for the extensions
   raqib claude [--date YYYY-MM-DD]    Show Claude Code sessions for a day (default today)
+  raqib demo [--reset] [--tabs a,b]   Open a made-up demo profile to film or share (your data stays hidden)
 
 Your day, tasks, and reminders:
 ${JOURNAL_USAGE}`;
@@ -245,6 +246,8 @@ async function main(): Promise<number> {
       return token();
     case 'claude':
       return claude(args);
+    case 'demo':
+      return (await import('./demo.ts')).runDemo(args);
     case 'status':
     case 'install':
     case 'uninstall':

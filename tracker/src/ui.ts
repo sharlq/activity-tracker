@@ -11,7 +11,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HttpError, readJson, send } from './api.ts';
+import { DEFAULT_HOST_NAMES, HttpError, readJson, send } from './api.ts';
 import { addToCategories } from './categoryEdit.ts';
 import { readClaudeSessions } from './claudeSessions.ts';
 import type { Config } from './config.ts';
@@ -77,7 +77,7 @@ const COOKIE = 'raqib';
 const PAGES = new Set(['today', 'morning', 'evening', 'back', 'week', 'projects', 'health', 'reminders', 'settings']);
 
 /** Activities you might log for time away from the PC, besides the screen categories. */
-export const LIFE_CATEGORIES = ['sleep', 'in bed', 'sleep routine', 'meal', 'exercise', 'errand', 'commute', 'social', 'rest', 'prayer', 'chores', 'study'];
+export const LIFE_CATEGORIES = ['sleep', 'in bed', 'sleep routine', 'pre shower', 'meal', 'exercise', 'errand', 'commute', 'social', 'rest', 'prayer', 'chores', 'study'];
 
 export function cookieValue(token: string): string {
   return createHash('sha256').update(`raqib-ui:${token}`).digest('hex');
@@ -168,6 +168,10 @@ export interface UiDeps {
   /** Sends the project reminder now; false when every project is already answered. */
   testProjectReminder?(): Promise<boolean>;
   now?: () => number;
+  /** The demo profile (raqib demo): the window shows only these tabs. */
+  demo?: { tabs: string[] };
+  /** Host names pages may come from; 127.0.0.1 and localhost unless set (the demo has its own). */
+  hostNames?: readonly string[];
 }
 
 export interface DayView {
@@ -566,12 +570,12 @@ function login(request: IncomingMessage, response: ServerResponse, url: URL, tok
   void request;
 }
 
-function checkUiRequest(request: IncomingMessage, port: number, token: string): void {
+function checkUiRequest(request: IncomingMessage, port: number, token: string, hostNames: readonly string[] = DEFAULT_HOST_NAMES): void {
   const cookie = cookies(request).get(COOKIE) ?? '';
   if (!safeEqual(cookie, cookieValue(token))) throw new HttpError(401, 'not signed in');
   if (request.headers['x-raqib'] !== '1') throw new HttpError(403, 'missing X-Raqib header');
   const origin = request.headers.origin;
-  if (origin !== undefined && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+  if (origin !== undefined && !hostNames.some((name) => origin === `http://${name}:${port}`)) {
     throw new HttpError(403, 'origin not allowed');
   }
 }
@@ -594,7 +598,7 @@ export function createUi(deps: UiDeps) {
     if (method === 'GET' && file) return serveStatic(response, file);
     if (!path.startsWith('/v1/ui/')) throw new HttpError(404, 'not found');
 
-    checkUiRequest(request, port, deps.token);
+    checkUiRequest(request, port, deps.token, deps.hostNames);
     const route = path.slice('/v1/ui'.length);
     let m: RegExpExecArray | null;
 
@@ -602,7 +606,7 @@ export function createUi(deps: UiDeps) {
       return send(response, 200, await buildDay(deps, url.searchParams.get('date') ?? dayKey(now()), now()));
     }
     if (method === 'GET' && route === '/status') {
-      return send(response, 200, { now: now(), today: dayKey(now()), settings: readSettings(journal) });
+      return send(response, 200, { now: now(), today: dayKey(now()), settings: readSettings(journal), demo: deps.demo ?? null });
     }
 
     if (method === 'POST' && route === '/entries') return send(response, 201, journal.addEntry(entryBody(await readJson(request)), now()));
