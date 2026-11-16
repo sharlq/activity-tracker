@@ -11,6 +11,8 @@ import type { Progress, Project, ProjectDay, ProjectOverview, ProjectStatus, Sub
 import { overview } from './projects.ts';
 import type { ScreenSource } from './screens.ts';
 import { migrate } from './store.ts';
+import type { BodyGoal, CheckpointDay, PlanDay, PlanExercise, TrainingSet, WeighIn } from './trainingTypes.ts';
+export type { BodyGoal, CheckpointDay, PlanDay, PlanExercise, TrainingSet, TrainingSource, WeighIn } from './trainingTypes.ts';
 
 export interface AudioSource {
   processName: string;
@@ -102,6 +104,150 @@ export interface Reminder {
   lastFiredAt: number | null;
   createdAt: number;
 }
+
+export type Meal = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+export const MEALS: readonly Meal[] = ['breakfast', 'lunch', 'dinner', 'snack'];
+
+/** Something you ate. Calories and grams are optional: log what you know. */
+export interface FoodEntry {
+  id: number;
+  day: string;
+  meal: Meal;
+  name: string;
+  calories: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+  at: number;
+}
+export type NewFood = Omit<FoodEntry, 'id' | 'at'>;
+
+
+type FoodRow = {
+  id: number;
+  day: string;
+  meal: Meal;
+  name: string;
+  calories: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  created_ms: number;
+};
+const foodFromRow = (r: FoodRow): FoodEntry => ({
+  id: r.id,
+  day: r.day,
+  meal: r.meal,
+  name: r.name,
+  calories: r.calories,
+  protein: r.protein_g,
+  carbs: r.carbs_g,
+  fat: r.fat_g,
+  at: r.created_ms,
+});
+type WeighInRow = { day: string; weight_kg: number; body_fat_pct: number | null; waist_cm: number | null; note: string | null; updated_ms: number };
+const weighInFromRow = (r: WeighInRow): WeighIn => ({ day: r.day, weight: r.weight_kg, bodyFat: r.body_fat_pct, waist: r.waist_cm, note: r.note, at: r.updated_ms });
+
+export const WORKOUT_KINDS = ['strength', 'run', 'walk', 'cycle', 'swim', 'sport', 'other'] as const;
+export type WorkoutKind = (typeof WORKOUT_KINDS)[number];
+
+/** One set: reps at a weight, or a timed or distance set. Anything unknown is null. */
+export interface WorkoutSet {
+  id: number;
+  exercise: string;
+  /** Exercises keep the order they were done in. */
+  position: number;
+  setNo: number;
+  reps: number | null;
+  weight: number | null;
+  rpe: number | null;
+  seconds: number | null;
+  distance: number | null;
+  /** 'outlier' when it looks like a typo (left out of the plan until checked); 'kept' once checked and right. */
+  flag?: string | null;
+}
+export type NewSet = Omit<WorkoutSet, 'id' | 'exercise' | 'position' | 'setNo'>;
+
+export interface Workout {
+  id: number;
+  day: string;
+  start: number | null;
+  name: string;
+  kind: WorkoutKind;
+  minutes: number | null;
+  calories: number | null;
+  note: string | null;
+  /** 'manual', or the app it came from ('caliber'). */
+  source: string;
+  externalId: string | null;
+  /** The plan day it was done as (Upper A), when logged from the plan. */
+  planDayId?: number | null;
+  sets: WorkoutSet[];
+}
+export type NewWorkout = Omit<Workout, 'id' | 'sets'>;
+export type WorkoutChange = Partial<Pick<Workout, 'name' | 'kind' | 'minutes' | 'calories' | 'note' | 'start'>>;
+
+/** An exercise's record: the heaviest set, and the last time it was done. */
+export interface ExerciseHistory {
+  exercise: string;
+  best: { weight: number; reps: number | null; day: string } | null;
+  lastDay: string;
+  lastSets: NewSet[];
+  times: number;
+}
+
+// Training plan -------------------------------------------------------------
+
+
+export type PlanExerciseChange = Partial<Omit<PlanExercise, 'id' | 'goals'>>;
+
+
+
+
+type PlanExerciseRow = {
+  id: number; day_id: number; position: number; name: string; aliases: string; sets: number; rep_min: number; rep_max: number;
+  step_kg: number; later_slot: number; per_hand: number; bodyweight: number; note: string | null; active: number;
+};
+
+type WorkoutRow = {
+  id: number;
+  day: string;
+  start_ms: number | null;
+  name: string;
+  kind: WorkoutKind;
+  minutes: number | null;
+  calories: number | null;
+  note: string | null;
+  source: string;
+  external_id: string | null;
+  plan_day_id?: number | null;
+};
+type SetRow = {
+  id: number;
+  workout_id: number;
+  position: number;
+  exercise: string;
+  set_no: number;
+  reps: number | null;
+  weight_kg: number | null;
+  rpe: number | null;
+  seconds: number | null;
+  distance_m: number | null;
+  flag?: string | null;
+};
+const setFromRow = (r: SetRow): WorkoutSet => ({
+  id: r.id,
+  exercise: r.exercise,
+  position: r.position,
+  setNo: r.set_no,
+  reps: r.reps,
+  weight: r.weight_kg,
+  rpe: r.rpe,
+  seconds: r.seconds,
+  distance: r.distance_m,
+  flag: r.flag ?? null,
+});
+const plainSet = (s: WorkoutSet): NewSet => ({ reps: s.reps, weight: s.weight, rpe: s.rpe, seconds: s.seconds, distance: s.distance });
 
 type AudioRow = {
   id: number;
@@ -868,6 +1014,361 @@ export class Journal {
 
   markFired(id: number, at: number): void {
     this.db.prepare('UPDATE reminders SET last_fired_ms = ? WHERE id = ?').run(at, id);
+  }
+
+  // Health -----------------------------------------------------------------
+
+  foods(day: string): FoodEntry[] {
+    return (this.db.prepare('SELECT * FROM food_entries WHERE day = ? ORDER BY created_ms, id').all(day) as FoodRow[]).map(foodFromRow);
+  }
+
+  /** Calories and protein per day, for days with anything logged. */
+  foodTotalsBetween(from: string, to: string): { day: string; calories: number; protein: number; items: number }[] {
+    return this.db
+      .prepare(
+        `SELECT day, COALESCE(SUM(calories), 0) AS calories, COALESCE(SUM(protein_g), 0) AS protein, COUNT(*) AS items
+         FROM food_entries WHERE day BETWEEN ? AND ? GROUP BY day ORDER BY day`,
+      )
+      .all(from, to) as { day: string; calories: number; protein: number; items: number }[];
+  }
+
+  /** What you've eaten lately, newest first, one per name: to log again with a click. */
+  recentFoods(limit = 12): Omit<FoodEntry, 'id' | 'day' | 'at'>[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.* FROM food_entries f
+         JOIN (SELECT LOWER(name) AS k, MAX(id) AS id FROM food_entries GROUP BY LOWER(name)) latest ON latest.id = f.id
+         ORDER BY f.created_ms DESC, f.id DESC LIMIT ?`,
+      )
+      .all(limit) as FoodRow[];
+    return rows.map(foodFromRow).map(({ id: _id, day: _day, at: _at, ...rest }) => rest);
+  }
+
+  addFood(food: NewFood, now = Date.now()): FoodEntry {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO food_entries (day, meal, name, calories, protein_g, carbs_g, fat_g, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(food.day, food.meal, food.name, food.calories, food.protein, food.carbs, food.fat, now);
+    return { id: Number(lastInsertRowid), ...food, at: now };
+  }
+
+  deleteFood(id: number): boolean {
+    return this.db.prepare('DELETE FROM food_entries WHERE id = ?').run(id).changes > 0;
+  }
+
+  weighIns(from: string, to: string): WeighIn[] {
+    return (this.db.prepare('SELECT * FROM weigh_ins WHERE day BETWEEN ? AND ? ORDER BY day').all(from, to) as WeighInRow[]).map(weighInFromRow);
+  }
+
+  /** One a day: weighing again the same day replaces it. */
+  setWeighIn(w: Omit<WeighIn, 'at'>, now = Date.now()): WeighIn {
+    this.db
+      .prepare(
+        `INSERT INTO weigh_ins (day, weight_kg, body_fat_pct, waist_cm, note, updated_ms) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (day) DO UPDATE SET weight_kg = excluded.weight_kg, body_fat_pct = excluded.body_fat_pct,
+           waist_cm = excluded.waist_cm, note = CASE WHEN ? THEN excluded.note ELSE note END, updated_ms = excluded.updated_ms`,
+      )
+      .run(w.day, w.weight, w.bodyFat, w.waist, w.note ?? null, now, w.note === undefined ? 0 : 1);
+    return weighInFromRow(this.db.prepare('SELECT * FROM weigh_ins WHERE day = ?').get(w.day) as WeighInRow);
+  }
+
+  deleteWeighIn(day: string): boolean {
+    return this.db.prepare('DELETE FROM weigh_ins WHERE day = ?').run(day).changes > 0;
+  }
+
+  // Exercise ---------------------------------------------------------------
+
+  private withSets(rows: WorkoutRow[]): Workout[] {
+    if (!rows.length) return [];
+    const sets = this.db
+      .prepare(`SELECT * FROM workout_sets WHERE workout_id IN (${rows.map(() => '?').join()}) ORDER BY position, set_no, id`)
+      .all(...rows.map((r) => r.id)) as SetRow[];
+    return rows.map((r) => ({
+      id: r.id,
+      day: r.day,
+      start: r.start_ms,
+      name: r.name,
+      kind: r.kind,
+      minutes: r.minutes,
+      calories: r.calories,
+      note: r.note,
+      source: r.source,
+      externalId: r.external_id,
+      planDayId: r.plan_day_id ?? null,
+      sets: sets.filter((s) => s.workout_id === r.id).map(setFromRow),
+    }));
+  }
+
+  workouts(day: string): Workout[] {
+    return this.withSets(this.db.prepare('SELECT * FROM workouts WHERE day = ? ORDER BY COALESCE(start_ms, created_ms), id').all(day) as WorkoutRow[]);
+  }
+
+  workout(id: number): Workout | null {
+    return this.withSets(this.db.prepare('SELECT * FROM workouts WHERE id = ?').all(id) as WorkoutRow[])[0] ?? null;
+  }
+
+  hasWorkout(source: string, externalId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM workouts WHERE source = ? AND external_id = ?').get(source, externalId) !== undefined;
+  }
+
+  addWorkout(w: NewWorkout, now = Date.now()): Workout {
+    const { lastInsertRowid } = this.db
+      .prepare('INSERT INTO workouts (day, start_ms, name, kind, minutes, calories, note, source, external_id, plan_day_id, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(w.day, w.start, w.name, w.kind, w.minutes, w.calories, w.note, w.source, w.externalId, w.planDayId ?? null, now);
+    return { id: Number(lastInsertRowid), ...w, planDayId: w.planDayId ?? null, sets: [] };
+  }
+
+  updateWorkout(id: number, change: WorkoutChange): Workout | null {
+    const current = this.workout(id);
+    if (!current) return null;
+    const next = { ...current, ...change };
+    this.db
+      .prepare('UPDATE workouts SET name = ?, kind = ?, minutes = ?, calories = ?, note = ?, start_ms = ? WHERE id = ?')
+      .run(next.name, next.kind, next.minutes, next.calories, next.note, next.start, id);
+    return this.workout(id);
+  }
+
+  deleteWorkout(id: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM workout_sets WHERE workout_id = ?').run(id);
+      this.db.prepare('DELETE FROM exercise_logs WHERE workout_id = ?').run(id);
+      return this.db.prepare('DELETE FROM workouts WHERE id = ?').run(id).changes > 0;
+    })();
+  }
+
+  /** Adds sets of one exercise to a workout, after any sets of it already there. */
+  addSets(workoutId: number, exercise: string, sets: readonly NewSet[]): Workout | null {
+    if (!this.workout(workoutId)) return null;
+    this.db.transaction(() => {
+      const same = this.db
+        .prepare('SELECT MIN(position) AS position, MAX(set_no) AS setNo, MIN(exercise) AS name FROM workout_sets WHERE workout_id = ? AND exercise = ? COLLATE NOCASE')
+        .get(workoutId, exercise) as { position: number | null; setNo: number | null; name: string | null };
+      // More of an exercise already in the workout keeps the name it has there.
+      if (same.name) exercise = same.name;
+      const position = same.position ?? ((this.db.prepare('SELECT MAX(position) AS p FROM workout_sets WHERE workout_id = ?').get(workoutId) as { p: number | null }).p ?? 0) + 1;
+      const insert = this.db.prepare(
+        'INSERT INTO workout_sets (workout_id, position, exercise, set_no, reps, weight_kg, rpe, seconds, distance_m, flag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      );
+      sets.forEach((s, i) => insert.run(workoutId, position, exercise, (same.setNo ?? 0) + i + 1, s.reps, s.weight, s.rpe, s.seconds, s.distance, s.flag ?? null));
+    })();
+    return this.workout(workoutId);
+  }
+
+  /** Removes one set; the workout it was in, or null. */
+  deleteSet(id: number): Workout | null {
+    const row = this.db.prepare('SELECT workout_id FROM workout_sets WHERE id = ?').get(id) as { workout_id: number } | undefined;
+    if (!row) return null;
+    this.db.prepare('DELETE FROM workout_sets WHERE id = ?').run(id);
+    return this.workout(row.workout_id);
+  }
+
+  /** The workout an earlier import saved under this id. */
+  importedWorkout(source: string, externalId: string): Workout | null {
+    return this.withSets(this.db.prepare('SELECT * FROM workouts WHERE source = ? AND external_id = ?').all(source, externalId) as WorkoutRow[])[0] ?? null;
+  }
+
+  /**
+   * Saves imported workouts in one go: new ones are added, and one already imported
+   * (`replaces`) takes the file's name, kind, minutes, calories, and sets. Its note stays
+   * unless the file has one.
+   */
+  saveImported(list: readonly { workout: NewWorkout; exercises: { name: string; sets: NewSet[] }[]; replaces?: number | null }[], now = Date.now()): { added: number; updated: number } {
+    return this.db.transaction(() => {
+      let added = 0;
+      let updated = 0;
+      for (const { workout, exercises, replaces } of list) {
+        let id: number;
+        if (replaces) {
+          this.db.prepare('DELETE FROM workout_sets WHERE workout_id = ?').run(replaces);
+          this.db
+            .prepare('UPDATE workouts SET name = ?, kind = ?, minutes = ?, calories = ?, start_ms = ?, note = COALESCE(?, note) WHERE id = ?')
+            .run(workout.name, workout.kind, workout.minutes, workout.calories, workout.start, workout.note, replaces);
+          id = replaces;
+          updated++;
+        } else {
+          id = this.addWorkout(workout, now).id;
+          added++;
+        }
+        for (const e of exercises) this.addSets(id, e.name, e.sets);
+      }
+      return { added, updated };
+    })();
+  }
+
+  /** Sessions, minutes, and volume (reps × kg) per day, for days with a workout. */
+  workoutTotalsBetween(from: string, to: string): { day: string; sessions: number; minutes: number; volume: number }[] {
+    return this.db
+      .prepare(
+        `SELECT w.day, COUNT(*) AS sessions, COALESCE(SUM(w.minutes), 0) AS minutes,
+           COALESCE(SUM((SELECT SUM(reps * weight_kg) FROM workout_sets s WHERE s.workout_id = w.id)), 0) AS volume
+         FROM workouts w WHERE w.day BETWEEN ? AND ? GROUP BY w.day ORDER BY w.day`,
+      )
+      .all(from, to) as { day: string; sessions: number; minutes: number; volume: number }[];
+  }
+
+  /** Exercises done lately, most recent first, as last spelled. */
+  recentExercises(limit = 12): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT s.exercise, MAX(w.day || printf('%012d', s.id)) AS k FROM workout_sets s JOIN workouts w ON w.id = s.workout_id
+           GROUP BY LOWER(s.exercise) ORDER BY k DESC LIMIT ?`,
+        )
+        .all(limit) as { exercise: string }[]
+    ).map((r) => r.exercise);
+  }
+
+  exerciseHistory(names: readonly string[]): ExerciseHistory[] {
+    return names.flatMap((name) => {
+      const rows = this.db
+        .prepare(
+          `SELECT s.*, w.day FROM workout_sets s JOIN workouts w ON w.id = s.workout_id
+           WHERE s.exercise = ? COLLATE NOCASE ORDER BY w.day, s.workout_id, s.set_no`,
+        )
+        .all(name) as (SetRow & { day: string })[];
+      const last = rows.at(-1);
+      if (!last) return [];
+      let best: ExerciseHistory['best'] = null;
+      for (const r of rows) {
+        if (r.weight_kg !== null && (!best || r.weight_kg > best.weight || (r.weight_kg === best.weight && (r.reps ?? 0) > (best.reps ?? 0)))) {
+          best = { weight: r.weight_kg, reps: r.reps, day: r.day };
+        }
+      }
+      return [{
+        exercise: last.exercise,
+        best,
+        lastDay: last.day,
+        lastSets: rows.filter((r) => r.workout_id === last.workout_id).map((r) => plainSet(setFromRow(r))),
+        times: new Set(rows.map((r) => r.workout_id)).size,
+      }];
+    });
+  }
+
+  // Training plan ----------------------------------------------------------
+
+  planDays(): PlanDay[] {
+    return this.db.prepare('SELECT id, name, position, note FROM plan_days ORDER BY position, id').all() as PlanDay[];
+  }
+
+  planExercises({ all = false } = {}): PlanExercise[] {
+    const rows = this.db.prepare(`SELECT * FROM plan_exercises ${all ? '' : 'WHERE active = 1'} ORDER BY day_id, position, id`).all() as PlanExerciseRow[];
+    const goals = this.db.prepare('SELECT plan_exercise_id AS id, day, weight_kg AS weight FROM exercise_goals ORDER BY day').all() as { id: number; day: string; weight: number }[];
+    return rows.map((r) => {
+      let aliases: string[] = [];
+      try {
+        const parsed = JSON.parse(r.aliases) as unknown;
+        if (Array.isArray(parsed)) aliases = parsed.filter((a): a is string => typeof a === 'string');
+      } catch {
+        // A broken list is no aliases.
+      }
+      return {
+        id: r.id, dayId: r.day_id, position: r.position, name: r.name, aliases, sets: r.sets, repMin: r.rep_min, repMax: r.rep_max, step: r.step_kg,
+        laterSlot: r.later_slot === 1, perHand: r.per_hand === 1, bodyweight: r.bodyweight === 1, note: r.note, active: r.active === 1,
+        goals: goals.filter((g) => g.id === r.id).map(({ day, weight }) => ({ day, weight })),
+      };
+    });
+  }
+
+  planExercise(id: number): PlanExercise | null {
+    return this.planExercises({ all: true }).find((e) => e.id === id) ?? null;
+  }
+
+  addPlanExercise(e: Omit<PlanExercise, 'id' | 'position' | 'active' | 'goals'> & { goals?: { day: string; weight: number }[] }, now = Date.now()): PlanExercise {
+    return this.db.transaction(() => {
+      const position = ((this.db.prepare('SELECT MAX(position) AS p FROM plan_exercises WHERE day_id = ?').get(e.dayId) as { p: number | null }).p ?? 0) + 1;
+      const { lastInsertRowid } = this.db
+        .prepare('INSERT INTO plan_exercises (day_id, position, name, aliases, sets, rep_min, rep_max, step_kg, later_slot, per_hand, bodyweight, note, active, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+        .run(e.dayId, position, e.name, JSON.stringify(e.aliases), e.sets, e.repMin, e.repMax, e.step, e.laterSlot ? 1 : 0, e.perHand ? 1 : 0, e.bodyweight ? 1 : 0, e.note, now);
+      const id = Number(lastInsertRowid);
+      for (const g of e.goals ?? []) this.setExerciseGoal(id, g.day, g.weight);
+      return this.planExercise(id) as PlanExercise;
+    })();
+  }
+
+  updatePlanExercise(id: number, change: PlanExerciseChange): PlanExercise | null {
+    const current = this.planExercise(id);
+    if (!current) return null;
+    const e = { ...current, ...change };
+    this.db
+      .prepare('UPDATE plan_exercises SET day_id = ?, position = ?, name = ?, aliases = ?, sets = ?, rep_min = ?, rep_max = ?, step_kg = ?, later_slot = ?, per_hand = ?, bodyweight = ?, note = ?, active = ? WHERE id = ?')
+      .run(e.dayId, e.position, e.name, JSON.stringify(e.aliases), e.sets, e.repMin, e.repMax, e.step, e.laterSlot ? 1 : 0, e.perHand ? 1 : 0, e.bodyweight ? 1 : 0, e.note, e.active ? 1 : 0, id);
+    return this.planExercise(id);
+  }
+
+  /** A goal weight at a checkpoint; null removes it. */
+  setExerciseGoal(id: number, day: string, weight: number | null): void {
+    if (weight === null) this.db.prepare('DELETE FROM exercise_goals WHERE plan_exercise_id = ? AND day = ?').run(id, day);
+    else this.db.prepare('INSERT INTO exercise_goals (plan_exercise_id, day, weight_kg) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET weight_kg = excluded.weight_kg').run(id, day, weight);
+  }
+
+  checkpoints(): CheckpointDay[] {
+    return this.db.prepare('SELECT day, label FROM checkpoints ORDER BY day').all() as CheckpointDay[];
+  }
+
+  setCheckpoint(day: string, label: string): void {
+    this.db.prepare('INSERT INTO checkpoints (day, label) VALUES (?, ?) ON CONFLICT DO UPDATE SET label = excluded.label').run(day, label);
+  }
+
+  bodyGoals(): BodyGoal[] {
+    return this.db.prepare('SELECT day, weight_kg AS weight, lean_kg AS lean FROM body_goals ORDER BY day').all() as BodyGoal[];
+  }
+
+  setBodyGoal(goal: BodyGoal): void {
+    this.db.prepare('INSERT INTO body_goals (day, weight_kg, lean_kg) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET weight_kg = excluded.weight_kg, lean_kg = excluded.lean_kg').run(goal.day, goal.weight, goal.lean);
+  }
+
+  /** Every set done under any of these names (case aside), oldest first, with its workout. */
+  trainingSets(names: readonly string[]): TrainingSet[] {
+    if (!names.length) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT s.id AS setId, s.workout_id AS workoutId, w.day, w.plan_day_id AS planDayId, w.source, s.exercise, s.set_no AS setNo,
+           s.reps, s.weight_kg AS weight, s.flag, COALESCE(l.form_reset, 0) AS formReset, l.note
+         FROM workout_sets s JOIN workouts w ON w.id = s.workout_id
+         LEFT JOIN exercise_logs l ON l.workout_id = s.workout_id AND l.exercise = s.exercise
+         WHERE LOWER(s.exercise) IN (${names.map(() => '?').join()})
+         ORDER BY w.day, COALESCE(w.start_ms, w.created_ms), s.workout_id, s.position, s.set_no, s.id`,
+      )
+      .all(...names.map((n) => n.toLowerCase())) as (Omit<TrainingSet, 'formReset'> & { formReset: number })[];
+    return rows.map((r) => ({ ...r, formReset: r.formReset === 1 }));
+  }
+
+  /** A form reset or a note on one exercise in a workout. */
+  setExerciseLog(workoutId: number, exercise: string, change: { formReset?: boolean; note?: string | null }): void {
+    const current = this.db.prepare('SELECT form_reset, note FROM exercise_logs WHERE workout_id = ? AND exercise = ?').get(workoutId, exercise) as { form_reset: number; note: string | null } | undefined;
+    const formReset = change.formReset ?? current?.form_reset === 1;
+    const note = change.note !== undefined ? change.note : (current?.note ?? null);
+    this.db
+      .prepare('INSERT INTO exercise_logs (workout_id, exercise, form_reset, note) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET form_reset = excluded.form_reset, note = excluded.note')
+      .run(workoutId, exercise, formReset ? 1 : 0, note);
+  }
+
+  /** The workout on a day done as a plan day, if there is one. */
+  planWorkout(day: string, planDayId: number): Workout | null {
+    return this.withSets(this.db.prepare('SELECT * FROM workouts WHERE day = ? AND plan_day_id = ? ORDER BY id LIMIT 1').all(day, planDayId) as WorkoutRow[])[0] ?? null;
+  }
+
+  /** Sets flagged as likely typos, newest first. */
+  flaggedSets(): (WorkoutSet & { day: string; workoutId: number })[] {
+    const rows = this.db
+      .prepare("SELECT s.*, w.day FROM workout_sets s JOIN workouts w ON w.id = s.workout_id WHERE s.flag = 'outlier' ORDER BY w.day DESC, s.id")
+      .all() as (SetRow & { day: string })[];
+    return rows.map((r) => ({ ...setFromRow(r), day: r.day, workoutId: r.workout_id }));
+  }
+
+  /** 'kept' when a flagged set was right after all; 'outlier' flags it again. */
+  setSetFlag(id: number, flag: string | null): boolean {
+    return this.db.prepare('UPDATE workout_sets SET flag = ? WHERE id = ?').run(flag, id).changes > 0;
+  }
+
+  /** Days with a strength workout, and how many, between two days. */
+  strengthDays(from: string, to: string): { day: string; sessions: number }[] {
+    return this.db
+      .prepare(`SELECT day, COUNT(*) AS sessions FROM workouts WHERE kind = 'strength' AND day BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM workout_sets s WHERE s.workout_id = workouts.id) GROUP BY day ORDER BY day`)
+      .all(from, to) as { day: string; sessions: number }[];
+  }
+
+  firstWorkoutDay(): string | null {
+    return (this.db.prepare("SELECT MIN(day) AS d FROM workouts WHERE kind = 'strength'").get() as { d: string | null }).d;
   }
 
   // Settings and small bits of state ----------------------------------------

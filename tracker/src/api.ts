@@ -60,8 +60,11 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
-function allowedHost(host: string | undefined, port: number): boolean {
-  return host === `${HOST}:${port}` || host === `localhost:${port}`;
+/** The names the window and the API answer to: 127.0.0.1 and localhost, unless told otherwise (the demo). */
+export const DEFAULT_HOST_NAMES = [HOST, 'localhost'];
+
+function allowedHost(host: string | undefined, port: number, names: readonly string[]): boolean {
+  return names.some((name) => host === `${name}:${port}`);
 }
 
 export async function readJson(request: IncomingMessage): Promise<unknown> {
@@ -115,11 +118,11 @@ export function send(response: ServerResponse, status: number, body?: object): v
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 }
 
-export function createApi(token: string, handlers: ApiHandlers, logger: Logger): Server {
+export function createApi(token: string, handlers: ApiHandlers, logger: Logger, hostNames: readonly string[] = DEFAULT_HOST_NAMES): Server {
   let warnedAboutToken = false;
 
   const route = async (request: IncomingMessage, response: ServerResponse, port: number) => {
-    if (!allowedHost(request.headers.host, port)) throw new HttpError(403, 'host not allowed');
+    if (!allowedHost(request.headers.host, port, hostNames)) throw new HttpError(403, 'host not allowed');
     const uiPath = request.url?.split('?')[0] ?? '';
     if (handlers.ui && (uiPath === '/ui' || uiPath === '/favicon.ico' || uiPath.startsWith('/ui/') || uiPath.startsWith('/v1/ui/'))) {
       await handlers.ui(request, response, port);

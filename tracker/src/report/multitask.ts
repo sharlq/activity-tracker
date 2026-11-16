@@ -74,8 +74,8 @@ export interface PhoneMultitasking {
   pairs: Pairing[];
 }
 
-/** An entry is phone use if its label says so ("On my phone", "Phone: Instagram"). */
-export const isPhoneEntry = (e: Pick<Entry, 'label'>) => /\bphone\b|\bmobile\b|جوال|هاتف|موبايل/i.test(e.label);
+/** An entry is phone use if its label says so ("Phone: Instagram", "On my phone"); "sometimes picking phone" is not. */
+export const isPhoneEntry = (e: Pick<Entry, 'label'>) => /^\s*(?:phone|mobile)\b|\bon (?:my|the) (?:phone|mobile)\b|على (?:ال)?(?:جوال|هاتف|موبايل)/i.test(e.label);
 
 /** "Phone: Instagram/TikTok" → "Instagram/TikTok"; "On my phone" → "Phone". */
 function phoneName(label: string): string {
