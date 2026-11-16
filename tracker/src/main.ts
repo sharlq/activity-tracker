@@ -238,6 +238,7 @@ async function gymSync(args: string[]): Promise<number> {
     return 1;
   }
   const r = await pushToGym(join(dataDir(), 'data.db'), target, { replacePlan: args.includes('--replace-plan') });
+  console.log(`From the phone: ${r.pulled} workout(s) saved${r.removed ? `, ${r.removed} removed` : ''}`);
   console.log(r.planPushed ? 'Plan: sent, as "Main plan"' : 'Plan: left as it is (the phone owns plans; --replace-plan overwrites them)');
   console.log(`Workouts: ${r.workouts} on the PC, ${r.added} added, ${r.updated} changed`);
   return 0;

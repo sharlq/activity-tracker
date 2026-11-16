@@ -6,6 +6,8 @@
 //
 // Safe to repeat: the plan goes up only the first time (after that the phone owns plans),
 // PC workouts are matched by their id, and workouts logged on the phone are never touched.
+// Workouts logged on the phone come back down first (pullFromGym), under the phone's own
+// ids (100,000,000 and up), so they show here and the PC's suggestions count them.
 import Database from 'better-sqlite3';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,6 +51,11 @@ export function restFrom(name: string, note: string | null, laterSlot: boolean):
 
 type Row = Record<string, unknown>;
 
+/** Ids the gym app gives what's logged there start here; below it is the PC's own. */
+export const GYM_FIRST_NUM = 100_000_000;
+/** The settings row holding the last phone change already pulled (ms). */
+export const GYM_PULLED_KEY = 'gym.pulledUntil';
+
 /** Everything the gym app gets from the PC, read from the database without changing it. */
 export function collectForGym(dbFile: string) {
   const db = new Database(dbFile, { readonly: true, fileMustExist: true });
@@ -85,7 +92,7 @@ export function collectForGym(dbFile: string) {
 
     const sets = all('SELECT * FROM workout_sets ORDER BY workout_id, position, set_no, id');
     const logs = all('SELECT * FROM exercise_logs');
-    const workouts = all('SELECT * FROM workouts ORDER BY id').map((w) => ({
+    const workouts = all(`SELECT * FROM workouts WHERE id < ${GYM_FIRST_NUM} ORDER BY id`).map((w) => ({
       num: w['id'] as number, day: w['day'] as string, start: (w['start_ms'] as number | null) ?? null, end: null, name: w['name'] as string,
       kind: w['kind'] as string, minutes: (w['minutes'] as number | null) ?? null, calories: (w['calories'] as number | null) ?? null,
       note: (w['note'] as string | null) ?? null, source: w['source'] as string, externalId: (w['external_id'] as string | null) ?? null,
@@ -123,7 +130,106 @@ export async function convexMutation(target: GymTarget, path: string, args: Reco
   throw new Error(body.errorMessage ?? `Convex answered ${response.status}`);
 }
 
+/** One Convex query over its plain HTTP API. */
+export async function convexQuery(target: GymTarget, path: string, args: Record<string, unknown>, fetchImpl: Fetch = fetch): Promise<unknown> {
+  const response = await fetchImpl(`${target.url}/api/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, args: { key: target.syncKey, ...args }, format: 'json' }),
+  });
+  let body: { status?: string; value?: unknown; errorMessage?: string } = {};
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    // Not JSON: reported below by its status.
+  }
+  if (body.status === 'success') return body.value;
+  throw new Error(body.errorMessage ?? `Convex answered ${response.status}`);
+}
+
+/** A workout as the gym app's changedSince returns it. */
+export interface GymWorkout {
+  num: number; day: string; start: number | null; end: number | null; name: string; kind: string;
+  minutes: number | null; calories: number | null; note: string | null; source: string; externalId: string | null;
+  planDayNum: number | null; createdAt: number; updatedAt: number; origin: string; deleted?: boolean;
+  sets: { num: number; exercise: string; position: number; setNo: number; reps: number | null; weight: number | null; rpe: number | null; seconds: number | null; distance: number | null; flag: string | null; at: number | null }[];
+  logs: { exercise: string; formReset: boolean; note: string | null }[];
+}
+
+/** Writes phone workouts into the database: new and changed ones replace what's here, deleted ones go. */
+export function applyGymWorkouts(dbFile: string, workouts: GymWorkout[]): { saved: number; removed: number; until: number | null } {
+  const db = new Database(dbFile, { fileMustExist: true });
+  db.pragma('busy_timeout = 5000');
+  try {
+    let saved = 0;
+    let removed = 0;
+    let until: number | null = null;
+    const drop = (id: number) => {
+      db.prepare('DELETE FROM workout_sets WHERE workout_id = ?').run(id);
+      db.prepare('DELETE FROM exercise_logs WHERE workout_id = ?').run(id);
+      return db.prepare('DELETE FROM workouts WHERE id = ?').run(id).changes;
+    };
+    const addWorkout = db.prepare(`INSERT INTO workouts (id, day, start_ms, name, kind, minutes, calories, note, source, external_id, created_ms, plan_day_id)
+      VALUES (@id, @day, @start, @name, @kind, @minutes, @calories, @note, @source, @externalId, @createdAt, @planDayNum)`);
+    const addSet = db.prepare(`INSERT INTO workout_sets (id, workout_id, position, exercise, set_no, reps, weight_kg, rpe, seconds, distance_m, flag)
+      VALUES (@num, @workout, @position, @exercise, @setNo, @reps, @weight, @rpe, @seconds, @distance, @flag)`);
+    const addLog = db.prepare('INSERT OR REPLACE INTO exercise_logs (workout_id, exercise, form_reset, note) VALUES (?, ?, ?, ?)');
+    db.transaction(() => {
+      for (const w of workouts) {
+        until = Math.max(until ?? 0, w.updatedAt);
+        // Only the phone's own ids: a PC workout is never overwritten from there.
+        if (w.num < GYM_FIRST_NUM) continue;
+        if (w.deleted) {
+          removed += drop(w.num);
+          continue;
+        }
+        drop(w.num);
+        // Minutes from the start and finish, when the phone didn't give any.
+        const minutes = w.minutes ?? (w.start !== null && w.end !== null && w.end > w.start ? Math.round((w.end - w.start) / 60_000) : null);
+        addWorkout.run({ ...w, id: w.num, minutes, externalId: null, source: 'gym' });
+        for (const s of w.sets) addSet.run({ ...s, workout: w.num });
+        for (const l of w.logs) addLog.run(w.num, l.exercise, l.formReset ? 1 : 0, l.note);
+        saved++;
+      }
+      if (until !== null) db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(GYM_PULLED_KEY, JSON.stringify(until));
+    })();
+    return { saved, removed, until };
+  } finally {
+    db.close();
+  }
+}
+
+function pulledUntil(dbFile: string): number {
+  const db = new Database(dbFile, { readonly: true, fileMustExist: true });
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(GYM_PULLED_KEY) as { value: string } | undefined;
+    const n = row ? Number(JSON.parse(row.value)) : 0;
+    return Number.isFinite(n) ? n : 0;
+  } finally {
+    db.close();
+  }
+}
+
+/** Fetches what was logged or changed on the phone since the last pull, and saves it here. */
+export async function pullFromGym(dbFile: string, target: GymTarget, options: { fetch?: Fetch } = {}): Promise<{ saved: number; removed: number }> {
+  let since = pulledUntil(dbFile);
+  let saved = 0;
+  let removed = 0;
+  for (;;) {
+    const rows = (await convexQuery(target, 'sync:changedSince', { since }, options.fetch)) as GymWorkout[];
+    const r = applyGymWorkouts(dbFile, rows);
+    saved += r.saved;
+    removed += r.removed;
+    // changedSince returns at most 200, so ask again while it's full.
+    if (rows.length < 200 || r.until === null || r.until <= since) break;
+    since = r.until;
+  }
+  return { saved, removed };
+}
+
 export interface GymSyncResult {
+  pulled: number;
+  removed: number;
   planPushed: boolean;
   workouts: number;
   added: number;
@@ -131,6 +237,7 @@ export interface GymSyncResult {
 }
 
 export async function pushToGym(dbFile: string, target: GymTarget, options: { replacePlan?: boolean; fetch?: Fetch } = {}): Promise<GymSyncResult> {
+  const { saved: pulled, removed } = await pullFromGym(dbFile, target, options);
   const { plan, workouts } = collectForGym(dbFile);
   const pushed = (await convexMutation(target, 'sync:pushPlan', { ...plan, replacePlan: options.replacePlan ?? false }, options.fetch)) as { planPushed: boolean };
   let added = 0;
@@ -140,7 +247,7 @@ export async function pushToGym(dbFile: string, target: GymTarget, options: { re
     added += r.added;
     updated += r.updated;
   }
-  return { planPushed: pushed.planPushed, workouts: workouts.length, added, updated };
+  return { pulled, removed, planPushed: pushed.planPushed, workouts: workouts.length, added, updated };
 }
 
 /** How often opening the window may sync again: often enough to be current, not on every click. */
@@ -169,7 +276,7 @@ export function gymSyncer(dbFile: string, dir: string, logger: Logger, now: () =
     running = true;
     lastStart = now();
     return push(dbFile, target).then(
-      (r) => logger.info(`Gym sync (${why}): ${r.workouts} workouts, ${r.added} added, ${r.updated} changed${r.planPushed ? ', plan sent' : ''}`),
+      (r) => logger.info(`Gym sync (${why}): ${r.pulled} from the phone${r.removed ? `, ${r.removed} removed` : ''}, ${r.workouts} workouts, ${r.added} added, ${r.updated} changed${r.planPushed ? ', plan sent' : ''}`),
       (error: unknown) => logger.error(`Gym sync (${why}) failed`, error),
     ).finally(() => {
       running = false;

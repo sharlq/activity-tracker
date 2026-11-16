@@ -87,7 +87,6 @@ export const pushWorkouts = mutation({
   },
 });
 
-/** Workouts logged here that changed after `since` (ms), oldest change first: for the PC to pull (deleted: true means drop it). */
 /**
  * A whole plan from the PC (scripts/importCaliberPlan.ts), made or remade by its name. An
  * exercise that's already in another plan keeps that one's reps, step, rest, goals and
@@ -154,11 +153,13 @@ export const importPlan = mutation({
   },
 });
 
+/** Workouts logged here that changed after `since` (ms), oldest change first: for the PC to pull (deleted: true means drop it). */
 export const changedSince = query({
   args: { key: v.string(), since: v.number() },
   handler: async (ctx, { key, since }) => {
     checkSyncKey(key);
-    const rows = await ctx.db.query('workouts').withIndex('by_updated', (q) => q.gt('updatedAt', since)).take(200);
-    return rows.filter((w) => w.origin === 'gym').map(({ _id, _creationTime, ...w }) => w);
+    // Filter before take, so 200 PC workouts can't hide the phone's.
+    const rows = await ctx.db.query('workouts').withIndex('by_updated', (q) => q.gt('updatedAt', since)).filter((q) => q.eq(q.field('origin'), 'gym')).take(200);
+    return rows.map(({ _id, _creationTime, ...w }) => w);
   },
 });
