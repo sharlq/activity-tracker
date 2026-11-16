@@ -10,11 +10,13 @@ function same(a: string, b: string): boolean {
   return diff === 0;
 }
 
-function check(given: string, name: 'GYM_KEY' | 'SYNC_KEY'): void {
+function check(given: string, name: 'GYM_KEY' | 'SYNC_KEY', min: number): void {
   const want = process.env[name];
-  if (!want || want.length < 20) throw new ConvexError(`${name} isn't set on the server (npx convex env set ${name} <long random text>)`);
+  if (!want) throw new ConvexError(`${name} isn't set on the server (Convex dashboard → Settings → Environment Variables)`);
+  if (want.length < min) throw new ConvexError(`${name} on the server is too short: use at least ${min} characters`);
   if (!same(given, want)) throw new ConvexError('wrong key');
 }
 
-export const checkGymKey = (key: string) => check(key, 'GYM_KEY');
-export const checkSyncKey = (key: string) => check(key, 'SYNC_KEY');
+/** Typed on the phone once, so it may be a short password; the sync key is only ever pasted. */
+export const checkGymKey = (key: string) => check(key, 'GYM_KEY', 8);
+export const checkSyncKey = (key: string) => check(key, 'SYNC_KEY', 20);

@@ -28,7 +28,10 @@ npm run check-parity                             # the cloud's suggestions match
 1. **Convex.** `npx convex login`, then `npx convex dev --configure=new` to make a cloud
    project, and `npx convex deploy` for its production deployment. Set the keys there:
    `npx convex env set GYM_KEY … --prod` and `npx convex env set SYNC_KEY … --prod`.
-2. **Your data.** `CONVEX_URL=<production URL> SYNC_KEY=… npm run push-from-pc`.
+2. **Your data.** Put `{ "url": "<production URL>", "syncKey": "…" }` in
+   `~/.activity-tracker/gym-sync.json`. رقيب then sends the plan and workouts when it starts
+   and when its window opens (at most every 5 minutes; results in its log). `raqib gym-sync`
+   does it now and prints the result. `CONVEX_URL=… SYNC_KEY=… npm run push-from-pc` still works.
 3. **Vercel.** Import the GitHub repo, set *Root Directory* to `gym`, and keep *Include
    files outside the root directory* on (the functions import `../tracker/src`). Build
    command: `npx convex deploy --cmd 'npm run build'`, output `dist`. Add the
