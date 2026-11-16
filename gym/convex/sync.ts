@@ -7,6 +7,21 @@ import { planExerciseFields, workoutFields } from './schema';
 
 const nullable = <T extends Parameters<typeof v.union>[0]>(t: T) => v.union(t, v.null());
 
+/** Same data, whatever the order of the keys (a missing key and undefined are the same). */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => [k, canonical(v)]),
+    );
+  }
+  return value;
+}
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+
 /**
  * The PC's plan and body data. The plan goes in as "Main plan" only while there are no
  * plans here (or with replacePlan): once you edit plans on the phone, the phone owns them.
@@ -60,7 +75,10 @@ export const pushWorkouts = mutation({
         await ctx.db.insert('workouts', { ...w, origin: 'pc' });
         added++;
       } else if (found.origin === 'pc') {
-        await ctx.db.replace(found._id, { ...w, origin: 'pc' });
+        // رقيب syncs every time it opens, so leave what hasn't changed alone.
+        const { _id, _creationTime, ...stored } = found;
+        if (sameValue(stored, { ...w, origin: 'pc' })) continue;
+        await ctx.db.replace(_id, { ...w, origin: 'pc' });
         updated++;
       }
     }

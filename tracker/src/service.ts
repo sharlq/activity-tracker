@@ -14,6 +14,7 @@ import type { ScreenSource, ScreenWindow } from './screens.ts';
 import { rememberVisibleTabs, screenSources } from './screens.ts';
 import { createApi, listen } from './api.ts';
 import { backupFolder, backUp } from './backup.ts';
+import { gymSyncer } from './gymSync.ts';
 import type { BrowserTab } from './browser.ts';
 import { domainOf, rememberTab } from './browser.ts';
 import type { Config } from './config.ts';
@@ -153,6 +154,8 @@ export interface ServiceOptions {
   screens?: ScreensProbe;
   /** Makes a copy of the database each day (see backup.ts). Off unless asked for. */
   backups?: boolean;
+  /** Sends the plan and workouts to the gym app at start and when the window opens (gymSync.ts). Off unless asked for. */
+  gymSync?: boolean;
 }
 
 export function dbPath(): string {
@@ -539,7 +542,14 @@ export function startService(
         return toast !== null;
       },
     });
-    api = createApi(options.apiToken, { onTab: receiveTab, onEditor: receiveEditor, onAudibleTabs: receiveAudibleTabs, onVisibleTabs: receiveVisibleTabs, ui }, logger);
+    // The window asks for /status as it loads, so that is when it has opened.
+    const syncGym = options.gymSync === true ? gymSyncer(dbPath(), dataDir(), logger) : null;
+    syncGym?.('start');
+    const uiAndSync: typeof ui = (request, response, port) => {
+      if (syncGym && request.method === 'GET' && request.url?.split('?')[0] === '/v1/ui/status') syncGym('window opened');
+      return ui(request, response, port);
+    };
+    api = createApi(options.apiToken, { onTab: receiveTab, onEditor: receiveEditor, onAudibleTabs: receiveAudibleTabs, onVisibleTabs: receiveVisibleTabs, ui: uiAndSync }, logger);
     listen(api, config.api.port).then(
       (port) => {
         logger.info(`API listening on 127.0.0.1:${port}`);

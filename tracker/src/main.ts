@@ -26,6 +26,7 @@ const USAGE = `رقيب (Raqib), your activity tracker. Usage:
   raqib purge --before YYYY-MM-DD     Permanently delete events that ended before that day
   raqib backup                        Copy the database now (one is also made each day)
   raqib token                         Show the API port and token for the extensions
+  raqib gym-sync [--replace-plan]     Send the plan and workouts to the gym app now (also done at start)
   raqib claude [--date YYYY-MM-DD]    Show Claude Code sessions for a day (default today)
   raqib demo [--reset] [--tabs a,b]   Open a made-up demo profile to film or share (your data stays hidden)
 
@@ -82,6 +83,7 @@ async function run(): Promise<number> {
     audio: { readSessions: readAudioSessions, processInfo },
     screens: win32Screens,
     backups: true,
+    gymSync: true,
   });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) {
     process.on(signal, () => shutdown(`Received ${signal}`));
@@ -228,6 +230,19 @@ function purge(args: string[]): number {
   return 0;
 }
 
+async function gymSync(args: string[]): Promise<number> {
+  const { GYM_SYNC_FILE, loadGymTarget, pushToGym } = await import('./gymSync.ts');
+  const target = loadGymTarget(dataDir());
+  if (!target) {
+    console.error(`Gym sync is not set up. Make ${join(dataDir(), GYM_SYNC_FILE)} holding:\n  { "url": "https://….convex.cloud", "syncKey": "your SYNC_KEY" }`);
+    return 1;
+  }
+  const r = await pushToGym(join(dataDir(), 'data.db'), target, { replacePlan: args.includes('--replace-plan') });
+  console.log(r.planPushed ? 'Plan: sent, as "Main plan"' : 'Plan: left as it is (the phone owns plans; --replace-plan overwrites them)');
+  console.log(`Workouts: ${r.workouts} on the PC, ${r.added} added, ${r.updated} changed`);
+  return 0;
+}
+
 async function main(): Promise<number> {
   const [command, ...args] = process.argv.slice(2);
   if (isJournalCommand(command)) return runJournalCommand(command as string, args);
@@ -244,6 +259,8 @@ async function main(): Promise<number> {
       return backup();
     case 'token':
       return token();
+    case 'gym-sync':
+      return gymSync(args);
     case 'claude':
       return claude(args);
     case 'demo':
