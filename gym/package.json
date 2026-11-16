@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p convex",
     "convex": "convex dev",
     "push-from-pc": "node --disable-warning=ExperimentalWarning scripts/pushFromPc.ts",
-    "check-parity": "node --disable-warning=ExperimentalWarning scripts/checkParity.ts"
+    "check-parity": "node --disable-warning=ExperimentalWarning scripts/checkParity.ts",
+    "import-caliber-plan": "node --disable-warning=ExperimentalWarning scripts/importCaliberPlan.ts"
   },
   "dependencies": {
     "convex": "^1.50.0"

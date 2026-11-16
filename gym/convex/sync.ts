@@ -3,6 +3,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { checkSyncKey } from './access';
+import { nextNum } from './lib/nums';
 import { planExerciseFields, workoutFields } from './schema';
 
 const nullable = <T extends Parameters<typeof v.union>[0]>(t: T) => v.union(t, v.null());
@@ -87,6 +88,72 @@ export const pushWorkouts = mutation({
 });
 
 /** Workouts logged here that changed after `since` (ms), oldest change first: for the PC to pull (deleted: true means drop it). */
+/**
+ * A whole plan from the PC (scripts/importCaliberPlan.ts), made or remade by its name. An
+ * exercise that's already in another plan keeps that one's reps, step, rest, goals and
+ * aliases; what's sent here (sets, and reps for new lifts) wins. It becomes the
+ * active plan only if asked, or if it already was.
+ */
+export const importPlan = mutation({
+  args: {
+    key: v.string(),
+    name: v.string(),
+    activate: v.optional(v.boolean()),
+    days: v.array(v.object({
+      name: v.string(),
+      exercises: v.array(v.object({ name: v.string(), sets: v.number(), repMin: v.number(), repMax: v.number() })),
+    })),
+  },
+  handler: async (ctx, { key, name, activate, days }) => {
+    checkSyncKey(key);
+    const allExercises = await ctx.db.query('planExercises').collect();
+    const allDays = await ctx.db.query('planDays').collect();
+    const plans = await ctx.db.query('plans').collect();
+    const old = plans.find((p) => p.name === name);
+    const known = new Map<string, (typeof allExercises)[number]>();
+    for (const e of allExercises) {
+      if (!e.active || allDays.find((d) => d.num === e.dayNum)?.planNum === old?.num) continue;
+      for (const n of [e.name, ...e.aliases]) if (!known.has(n.toLowerCase())) known.set(n.toLowerCase(), e);
+    }
+    let planNum: number;
+    if (old) {
+      planNum = old.num;
+      for (const d of allDays.filter((d) => d.planNum === old.num)) {
+        for (const e of allExercises.filter((e) => e.dayNum === d.num)) await ctx.db.delete(e._id);
+        await ctx.db.delete(d._id);
+      }
+    } else {
+      planNum = await nextNum(ctx);
+      await ctx.db.insert('plans', { num: planNum, name, note: null, active: false, createdAt: Date.now() });
+    }
+    if (activate) {
+      for (const p of await ctx.db.query('plans').collect()) await ctx.db.patch(p._id, { active: p.num === planNum });
+    }
+    const made: { day: string; name: string; sets: number; reps: string; known: boolean }[] = [];
+    for (const [i, d] of days.entries()) {
+      const dayNum = await nextNum(ctx);
+      await ctx.db.insert('planDays', { num: dayNum, planNum, name: d.name, position: i + 1, note: null });
+      for (const [j, x] of d.exercises.entries()) {
+        const like = known.get(x.name.toLowerCase());
+        const row = {
+          num: await nextNum(ctx), dayNum, position: j + 1, name: x.name, active: true,
+          aliases: like ? [like.name, ...like.aliases].filter((n) => n.toLowerCase() !== x.name.toLowerCase()) : [],
+          // The first lift of a day is never in a later slot; the rest keep the other plan's.
+          sets: x.sets, laterSlot: j > 0 && (like?.laterSlot ?? false),
+          repMin: like?.repMin ?? x.repMin, repMax: like?.repMax ?? x.repMax, step: like?.step ?? 2.5,
+          perHand: like?.perHand ?? false, bodyweight: like?.bodyweight ?? false,
+          // Notes like "After bench" belong to the other plan's order.
+          note: like?.note && !/^after\b/i.test(like.note) ? like.note : null,
+          restSeconds: like?.restSeconds ?? 90, goals: like?.goals ?? [],
+        };
+        await ctx.db.insert('planExercises', row);
+        made.push({ day: d.name, name: x.name, sets: row.sets, reps: `${row.repMin}–${row.repMax}`, known: !!like });
+      }
+    }
+    return { planNum, replaced: !!old, made };
+  },
+});
+
 export const changedSince = query({
   args: { key: v.string(), since: v.number() },
   handler: async (ctx, { key, since }) => {
