@@ -330,6 +330,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE plan_exercises ADD COLUMN per_side INTEGER NOT NULL DEFAULT 0;
   ${machineSwapSql(Date.now())}
   `,
+  // When a set was logged (ms), as the gym app records it: the time between sets comes from it.
+  `
+  ALTER TABLE workout_sets ADD COLUMN logged_ms INTEGER;
+  `,
 ];
 
 /** Brings a database up to the newest schema. Safe to call from several connections. */

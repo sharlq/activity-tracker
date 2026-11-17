@@ -39,3 +39,13 @@ test('machineFor: any spelling of an old lift; per side in labels', () => {
   assert.equal(machineFor('Dumbbell Shoulder Press'), null);
   assert.equal(weightLabel(40, { perSide: true }), '40 kg per side');
 });
+
+test('gapsBetweenSets: seconds since the set logged before it, in tap order, whatever the exercise', async () => {
+  const { averageGap, gapsBetweenSets } = await import('./setTimes.ts');
+  const gaps = gapsBetweenSets([
+    { num: 1, at: 1_000 }, { num: 3, at: 181_000 }, { num: 2, at: 91_000 }, { num: 4, at: null },
+  ]);
+  assert.deepEqual([...gaps.entries()].sort((a, b) => a[0] - b[0]), [[1, null], [2, 90], [3, 90], [4, null]]);
+  assert.equal(averageGap([null, 90, 150]), 120);
+  assert.equal(averageGap([null]), null);
+});

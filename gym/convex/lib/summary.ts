@@ -3,6 +3,7 @@
 // done. Pure: it reads a TrainingSource and the workout, and asks the shared engine.
 import type { GoalProgress, Verdict } from '../../../tracker/src/progression.ts';
 import { estimated1RM, goalProgress, verdict, weightLabel } from '../../../tracker/src/progression.ts';
+import { averageGap, gapsBetweenSets } from '../../../tracker/src/setTimes.ts';
 import { exerciseState, ruleOf } from '../../../tracker/src/trainingPlan.ts';
 import type { TrainingSource } from '../../../tracker/src/trainingTypes.ts';
 
@@ -13,7 +14,7 @@ export interface SummaryWorkout {
   start: number | null;
   end: number | null;
   planDayNum: number | null;
-  sets: { exercise: string; position: number; reps: number | null; weight: number | null; at: number | null }[];
+  sets: { num: number; exercise: string; position: number; reps: number | null; weight: number | null; at: number | null }[];
 }
 
 export interface SummaryExercise {
@@ -23,7 +24,10 @@ export interface SummaryExercise {
   repRange: string | null;
   /** What the engine said to lift before today. */
   aimLabel: string | null;
-  logged: { weight: number | null; reps: number | null }[];
+  /** rest: seconds since the set logged before it (rest plus the set), null for the first. */
+  logged: { weight: number | null; reps: number | null; rest: number | null }[];
+  /** Average time between this exercise's own sets. */
+  avgRest: number | null;
   topLabel: string | null;
   volume: number;
   /** The engine's call on today's sets: the weight for next time. */
@@ -34,7 +38,7 @@ export interface SummaryExercise {
 
 export interface Summary {
   workout: { num: number; day: string; name: string; start: number | null; end: number | null; minutes: number | null };
-  totals: { sets: number; plannedSets: number; reps: number; volume: number; exercises: number; plannedExercises: number; records: number };
+  totals: { sets: number; plannedSets: number; reps: number; volume: number; exercises: number; plannedExercises: number; records: number; avgRest: number | null; longestRest: number | null };
   /** The last time: the same plan day, else the latest workout with 2+ of today's exercises. Volume only over exercises both had. */
   previous: { name: string; day: string; samePlanDay: boolean; volume: number; currentVolume: number; shared: number; minutes: number | null } | null;
   exercises: SummaryExercise[];
@@ -78,6 +82,7 @@ export function summarize(source: TrainingSource, w: SummaryWorkout, previous: S
   const names = [...new Set([...planned.flatMap((e) => [e.name, ...e.aliases]), ...w.sets.map((s) => s.exercise)].map((n) => n.toLowerCase()))];
   const history = source.trainingSets(names);
   const used = new Set<string>();
+  const gaps = gapsBetweenSets(w.sets);
 
   const exercises: SummaryExercise[] = planned.map((e) => {
     const rule = ruleOf(e);
@@ -108,7 +113,8 @@ export function summarize(source: TrainingSource, w: SummaryWorkout, previous: S
       plannedSets: state.suggestion.sets,
       repRange: `${e.repMin}–${e.repMax}`,
       aimLabel: state.suggestedLabel,
-      logged: mine.map((s) => ({ weight: s.weight, reps: s.reps })),
+      logged: mine.map((s) => ({ weight: s.weight, reps: s.reps, rest: gaps.get(s.num) ?? null })),
+      avgRest: averageGap(mine.slice(1).map((s) => gaps.get(s.num) ?? null)),
       topLabel: top === null ? null : weightLabel(top, rule),
       volume: volumeOf(mine),
       next: v ? { kind: v.kind, message: v.message, nextWeight: v.nextWeight, nextLabel: weightLabel(v.nextWeight, rule), nextSets: after?.sets ?? e.sets, setsReason: after?.setsReason ?? null } : null,
@@ -129,7 +135,7 @@ export function summarize(source: TrainingSource, w: SummaryWorkout, previous: S
     const top = list.some((s) => s.weight !== null) ? Math.max(...list.map((s) => s.weight ?? 0)) : null;
     exercises.push({
       name, inPlan: false, plannedSets: null, repRange: null, aimLabel: null,
-      logged: list.map((s) => ({ weight: s.weight, reps: s.reps })), topLabel: top === null ? null : `${r1(top)} kg`,
+      logged: list.map((s) => ({ weight: s.weight, reps: s.reps, rest: gaps.get(s.num) ?? null })), avgRest: averageGap(list.slice(1).map((s) => gaps.get(s.num) ?? null)), topLabel: top === null ? null : `${r1(top)} kg`,
       volume: volumeOf(list), next: null, record: null, progress: null,
     });
   }
@@ -144,6 +150,8 @@ export function summarize(source: TrainingSource, w: SummaryWorkout, previous: S
       exercises: exercises.filter((e) => e.logged.length).length,
       plannedExercises: planned.length,
       records: exercises.filter((e) => e.record).length,
+      avgRest: averageGap([...gaps.values()]),
+      longestRest: [...gaps.values()].reduce<number | null>((m, g) => (g !== null && (m === null || g > m) ? g : m), null),
     },
     previous: previous ? comparison(source, w, previous, previousMinutes) : null,
     exercises,

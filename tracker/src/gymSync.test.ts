@@ -99,7 +99,7 @@ test('pullFromGym: saves phone workouts, replaces changed ones, drops deleted on
     const row = db.prepare('SELECT name, minutes, source FROM workouts WHERE id = 100000010').get();
     assert.deepEqual(row, { name: 'Upper A', minutes: 45, source: 'gym' });
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM workouts WHERE id = 5').get() as { n: number }).n, 0);
-    assert.equal((db.prepare('SELECT weight_kg FROM workout_sets WHERE workout_id = 100000010').get() as { weight_kg: number }).weight_kg, 60);
+    assert.deepEqual(db.prepare('SELECT weight_kg, logged_ms FROM workout_sets WHERE workout_id = 100000010').get(), { weight_kg: 60, logged_ms: 5 });
     db.close();
     // Pulled ones aren't pushed back up.
     assert.equal(collectForGym(file).workouts.some((x) => x.num >= 100_000_000), false);

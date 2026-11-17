@@ -142,6 +142,9 @@ a { color: inherit; }
 .set.saving { opacity: 0.6; }
 .set-no { color: var(--ink-muted); font-size: 14px; width: 48px; }
 .set-what { flex: 1; font-weight: 600; font-variant-numeric: tabular-nums; }
+.set-gap { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.since { margin: 6px 0 0; font-size: 15px; }
+.since-time { font-variant-numeric: tabular-nums; }
 .now { font-weight: 600; padding: 8px 12px; border-radius: 10px; background: var(--track); }
 .now.good { background: var(--good-soft); color: var(--good); }
 .now.accent { background: var(--accent-soft); color: var(--accent-ink); }

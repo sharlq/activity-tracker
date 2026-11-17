@@ -65,6 +65,8 @@ export interface TrainingSet {
   flag: string | null;
   formReset: boolean;
   note: string | null;
+  /** When it was logged (ms), where that's known: sets logged in the gym app. */
+  at?: number | null;
 }
 
 /** What trainingPlan.ts reads: the journal here, the cloud's own data in the gym app. */

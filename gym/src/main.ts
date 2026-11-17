@@ -47,7 +47,7 @@ let dayNum: number | undefined;
 let open: number | null = null;
 const inputs = new Map<number, { weight: number; reps: number }>();
 /** Sets sent but not yet confirmed (shown greyed until Convex has them). */
-const pending: { id: number; exercise: number; weight: number; reps: number }[] = [];
+const pending: { id: number; exercise: number; weight: number; reps: number; at: number }[] = [];
 let pendingId = 0;
 let unsubscribe: (() => void) | null = null;
 let online = true;
@@ -204,7 +204,8 @@ async function logSet(e: Exercise, all: Exercise[]): Promise<void> {
   unlockSound();
   const { weight, reps } = defaults(e);
   const id = ++pendingId;
-  pending.push({ id, exercise: e.num, weight, reps });
+  const at = Date.now();
+  pending.push({ id, exercise: e.num, weight, reps, at });
   const n = done(e);
   // Rest starts now; the last set of an exercise moves on to the next one.
   const next = n >= e.sets ? all.find((x) => x.num !== e.num && done(x) < x.sets) : undefined;
@@ -220,7 +221,7 @@ async function logSet(e: Exercise, all: Exercise[]): Promise<void> {
   // Convex resolves a mutation once the subscribed queries show it, so the greyed set
   // gives way to the real one without a gap. Offline, it waits and sends on reconnect.
   try {
-    await client!.mutation(api.training.logSet, { key: key!, date, exerciseNum: e.num, weight, reps, at: Date.now() });
+    await client!.mutation(api.training.logSet, { key: key!, date, exerciseNum: e.num, weight, reps, at });
     settle();
   } catch (err) {
     settle();
@@ -273,6 +274,32 @@ function plannedSets(e: Exercise): HTMLElement {
   );
 }
 
+/** Seconds between each logged set and the one logged before it in the workout (any exercise). */
+function gapsOf(all: Exercise[]): Map<number, number> {
+  const timed = all.flatMap((x) => x.logged).filter((s) => s.at !== null).sort((a, b) => (a.at as number) - (b.at as number));
+  return new Map(timed.slice(1).map((s, i) => [s.id, Math.round(((s.at as number) - (timed[i]!.at as number)) / 1000)]));
+}
+
+/** When the last set was logged: a pending one counts from its tap. */
+function lastLoggedAt(all: Exercise[]): number | null {
+  const times = [...all.flatMap((x) => x.logged.map((s) => s.at)), ...pending.map((p) => p.at)].filter((t): t is number => t !== null);
+  return times.length ? Math.max(...times) : null;
+}
+
+/** The clock since the last set: counts on its own, so it's right even when the rest timer was missed. */
+let sinceTick = 0;
+function sinceLastSet(t: { exercises: Exercise[]; workout: { end: number | null } | null }): HTMLElement | null {
+  window.clearInterval(sinceTick);
+  const last = lastLoggedAt(t.exercises);
+  if (last === null || t.workout?.end) return null;
+  const value = h('strong', { class: 'since-time' }, mmss(Math.max(0, Math.round((Date.now() - last) / 1000))));
+  sinceTick = window.setInterval(() => {
+    if (!value.isConnected) return window.clearInterval(sinceTick);
+    value.textContent = mmss(Math.max(0, Math.round((Date.now() - last) / 1000)));
+  }, 1000);
+  return h('p', { class: 'since', role: 'timer', 'aria-label': 'Time since your last set' }, h('span', { class: 'muted' }, 'Since last set '), value);
+}
+
 function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): HTMLElement {
   const count = done(e);
   const complete = count >= e.sets;
@@ -289,6 +316,7 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
   const { weight, reps } = defaults(e);
   const set = (patch: Partial<{ weight: number; reps: number }>) => inputs.set(e.num, { ...defaults(e), ...patch });
   const progress = e.progress ? STATUS[e.progress.status] : null;
+  const gaps = gapsOf(all);
   const rows = [
     ...e.logged.map((s, i) =>
       h(
@@ -296,6 +324,7 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
         { class: 'set' },
         h('span', { class: 'set-no' }, `Set ${i + 1}`),
         h('span', { class: 'set-what' }, `${wLabel(s.weight ?? (e.bodyweight ? 0 : null), e)} × ${s.reps ?? '—'}`),
+        gaps.has(s.id) ? h('span', { class: 'set-gap muted small', title: 'Time since the set before it was logged' }, `⏱ ${mmss(gaps.get(s.id)!)}`) : null,
         workoutNum !== null ? h('button', { class: 'btn ghost small', onclick: () => void deleteSet(workoutNum, s.id), 'aria-label': `Remove set ${i + 1}` }, '✕') : null,
       ),
     ),
@@ -387,6 +416,7 @@ function todayScreen(): HTMLElement[] {
       ),
       h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': total, 'aria-valuenow': logged }, h('span', { style: `width:${total ? (logged / total) * 100 : 0}%` })),
       h('div', { class: 'top-row small' }, h('span', { class: 'muted' }, `${logged} of ${total} sets`), awake),
+      sinceLastSet(t),
       t.started !== null && t.started !== t.day.id ? h('p', { class: 'note' }, 'You already started another plan day today. Sets here go into a separate workout.') : null,
       t.day.note ? h('p', { class: 'muted small', dir: 'auto' }, t.day.note) : null,
     ),
@@ -430,6 +460,7 @@ function renderSummary(s: Summary): void {
         tile('Sets', `${s.totals.sets}`, s.totals.plannedSets ? `of ${s.totals.plannedSets} planned` : undefined),
         tile('Volume', `${thousands(s.totals.volume)} kg`, `${s.totals.reps} reps`),
         tile('Records', String(s.totals.records), s.totals.records ? 'new bests' : 'none today'),
+        tile('Between sets', s.totals.avgRest !== null ? mmss(s.totals.avgRest) : '—', s.totals.longestRest !== null ? `average · longest ${mmss(s.totals.longestRest)}` : 'average'),
       ),
       prev
         ? h(
@@ -449,6 +480,9 @@ function renderSummary(s: Summary): void {
           { class: 'sum-ex' },
           h('div', { class: 'sum-head' }, h('strong', { dir: 'auto' }, e.name), e.plannedSets !== null ? h('span', { class: 'muted small' }, `${e.logged.length}/${e.plannedSets} sets`) : h('span', { class: 'badge' }, 'extra')),
           h('p', { class: 'sum-sets' }, e.logged.map((x) => `${x.weight === null ? 'BW' : n1(x.weight)}×${x.reps ?? '—'}`).join('  ·  ')),
+          e.logged.some((x) => x.rest !== null)
+            ? h('p', { class: 'muted small' }, `⏱ ${e.logged.map((x) => (x.rest === null ? '—' : mmss(x.rest))).join('  ·  ')}`, e.avgRest !== null ? `  (average ${mmss(e.avgRest)})` : '')
+            : null,
           h(
             'div',
             { class: 'badges' },
