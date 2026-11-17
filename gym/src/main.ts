@@ -32,9 +32,9 @@ function shortDay(day: string): string {
 }
 
 /** A weight as the gym says it: "85 kg", "BW", "+5 kg", "20 kg per hand". */
-function wLabel(w: number | null, e: Pick<Exercise, 'bodyweight' | 'perHand'>): string {
+function wLabel(w: number | null, e: Pick<Exercise, 'bodyweight' | 'perHand' | 'perSide'>): string {
   if (e.bodyweight) return !w ? 'BW' : `${w > 0 ? '+' : '−'}${n1(Math.abs(w))} kg`;
-  return w === null ? '—' : `${n1(w)} kg${e.perHand ? ' per hand' : ''}`;
+  return w === null ? '—' : `${n1(w)} kg${e.perHand ? ' per hand' : e.perSide ? ' per side' : ''}`;
 }
 
 // ------------------------------------------------------------------ state
@@ -259,7 +259,7 @@ function restPicker(e: Exercise): HTMLElement {
 /** The plan's number of sets for this exercise, from now on (the engine judges that many). */
 function plannedSets(e: Exercise): HTMLElement {
   const change = (by: number) => () => {
-    const sets = e.sets + by;
+    const sets = e.planSets + by;
     if (sets < 1 || sets > 10) return;
     void attempt(() => client!.mutation(api.plans.updateExercise, { key: key!, exerciseNum: e.num, sets }), `${e.name}: ${sets} sets from now on`);
   };
@@ -267,9 +267,9 @@ function plannedSets(e: Exercise): HTMLElement {
     'div',
     { class: 'planned' },
     h('span', { class: 'muted small' }, 'Planned sets'),
-    h('button', { class: 'btn ghost small', onclick: change(-1), disabled: e.sets <= 1, 'aria-label': 'One planned set fewer' }, '−'),
-    h('strong', null, String(e.sets)),
-    h('button', { class: 'btn ghost small', onclick: change(1), disabled: e.sets >= 10, 'aria-label': 'One planned set more' }, '+'),
+    h('button', { class: 'btn ghost small', onclick: change(-1), disabled: e.planSets <= 1, 'aria-label': 'One planned set fewer' }, '−'),
+    h('strong', null, String(e.planSets)),
+    h('button', { class: 'btn ghost small', onclick: change(1), disabled: e.planSets >= 10, 'aria-label': 'One planned set more' }, '+'),
   );
 }
 
@@ -315,6 +315,7 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
         'div',
         { class: 'aim' },
         h('div', null, h('span', { class: 'aim-label' }, 'Aim'), h('strong', null, wLabel(e.suggested, e)), h('span', { class: 'muted' }, ` · ${e.sets} × ${e.repMin}–${e.repMax}`)),
+        e.setsReason ? h('div', { class: 'small' }, h('span', { class: 'badge accent' }, `${e.sets} sets`), ` ${e.setsReason}`) : null,
         e.beat ? h('div', null, h('span', { class: 'aim-label' }, 'Beat'), h('strong', null, e.beat.join(' · '))) : null,
         e.last
           ? h('div', { class: 'muted small' }, `Last ${shortDay(e.last.day)}: ${wLabel(e.last.weight, e)} × ${e.last.reps.join('/')}`, e.lastVerdict ? ` → ${e.lastVerdict}` : '')
@@ -327,7 +328,7 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
       h(
         'div',
         { class: 'inputs' },
-        stepper(e.bodyweight ? 'Added kg' : e.perHand ? 'kg per hand' : 'kg', weight, e.step, e.bodyweight ? -200 : 0, (v) => set({ weight: v }), true),
+        stepper(e.bodyweight ? 'Added kg' : e.perHand ? 'kg per hand' : e.perSide ? 'kg per side' : 'kg', weight, e.step, e.bodyweight ? -200 : 0, (v) => set({ weight: v }), true),
         stepper('Reps', reps, 1, 0, (v) => set({ reps: v }), false),
       ),
       h('button', { class: 'btn primary big', onclick: () => void logSet(e, all) }, complete ? `Log extra set (${count + 1})` : `Log set ${count + 1} of ${e.sets}`),
@@ -452,7 +453,8 @@ function renderSummary(s: Summary): void {
             'div',
             { class: 'badges' },
             e.record ? h('span', { class: 'badge good' }, `★ New best ${e.record.label} (was ${e.record.before})`) : null,
-            next && e.next ? h('span', { class: `badge ${next[1]}` }, `${next[0]} → ${e.next.nextLabel} next time`) : null,
+            next && e.next ? h('span', { class: `badge ${next[1]}` }, `${next[0]} → ${e.next.nextLabel} × ${e.next.nextSets} sets next time`) : null,
+            e.next && finished && e.next.setsReason ? h('span', { class: 'badge accent' }, e.next.setsReason) : null,
             !finished ? h('span', { class: 'badge warn' }, `Unfinished: ${e.logged.length} of ${e.plannedSets} sets`) : null,
             status ? h('span', { class: `badge ${status[1]}` }, status[0]) : null,
           ),

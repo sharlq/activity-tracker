@@ -206,7 +206,7 @@ export type PlanExerciseChange = Partial<Omit<PlanExercise, 'id' | 'goals'>>;
 
 type PlanExerciseRow = {
   id: number; day_id: number; position: number; name: string; aliases: string; sets: number; rep_min: number; rep_max: number;
-  step_kg: number; later_slot: number; per_hand: number; bodyweight: number; note: string | null; active: number;
+  step_kg: number; later_slot: number; per_hand: number; per_side: number; bodyweight: number; note: string | null; active: number;
 };
 
 type WorkoutRow = {
@@ -1262,7 +1262,7 @@ export class Journal {
       }
       return {
         id: r.id, dayId: r.day_id, position: r.position, name: r.name, aliases, sets: r.sets, repMin: r.rep_min, repMax: r.rep_max, step: r.step_kg,
-        laterSlot: r.later_slot === 1, perHand: r.per_hand === 1, bodyweight: r.bodyweight === 1, note: r.note, active: r.active === 1,
+        laterSlot: r.later_slot === 1, perHand: r.per_hand === 1, perSide: r.per_side === 1, bodyweight: r.bodyweight === 1, note: r.note, active: r.active === 1,
         goals: goals.filter((g) => g.id === r.id).map(({ day, weight }) => ({ day, weight })),
       };
     });
@@ -1276,8 +1276,8 @@ export class Journal {
     return this.db.transaction(() => {
       const position = ((this.db.prepare('SELECT MAX(position) AS p FROM plan_exercises WHERE day_id = ?').get(e.dayId) as { p: number | null }).p ?? 0) + 1;
       const { lastInsertRowid } = this.db
-        .prepare('INSERT INTO plan_exercises (day_id, position, name, aliases, sets, rep_min, rep_max, step_kg, later_slot, per_hand, bodyweight, note, active, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
-        .run(e.dayId, position, e.name, JSON.stringify(e.aliases), e.sets, e.repMin, e.repMax, e.step, e.laterSlot ? 1 : 0, e.perHand ? 1 : 0, e.bodyweight ? 1 : 0, e.note, now);
+        .prepare('INSERT INTO plan_exercises (day_id, position, name, aliases, sets, rep_min, rep_max, step_kg, later_slot, per_hand, per_side, bodyweight, note, active, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+        .run(e.dayId, position, e.name, JSON.stringify(e.aliases), e.sets, e.repMin, e.repMax, e.step, e.laterSlot ? 1 : 0, e.perHand ? 1 : 0, e.perSide ? 1 : 0, e.bodyweight ? 1 : 0, e.note, now);
       const id = Number(lastInsertRowid);
       for (const g of e.goals ?? []) this.setExerciseGoal(id, g.day, g.weight);
       return this.planExercise(id) as PlanExercise;
@@ -1289,8 +1289,8 @@ export class Journal {
     if (!current) return null;
     const e = { ...current, ...change };
     this.db
-      .prepare('UPDATE plan_exercises SET day_id = ?, position = ?, name = ?, aliases = ?, sets = ?, rep_min = ?, rep_max = ?, step_kg = ?, later_slot = ?, per_hand = ?, bodyweight = ?, note = ?, active = ? WHERE id = ?')
-      .run(e.dayId, e.position, e.name, JSON.stringify(e.aliases), e.sets, e.repMin, e.repMax, e.step, e.laterSlot ? 1 : 0, e.perHand ? 1 : 0, e.bodyweight ? 1 : 0, e.note, e.active ? 1 : 0, id);
+      .prepare('UPDATE plan_exercises SET day_id = ?, position = ?, name = ?, aliases = ?, sets = ?, rep_min = ?, rep_max = ?, step_kg = ?, later_slot = ?, per_hand = ?, per_side = ?, bodyweight = ?, note = ?, active = ? WHERE id = ?')
+      .run(e.dayId, e.position, e.name, JSON.stringify(e.aliases), e.sets, e.repMin, e.repMax, e.step, e.laterSlot ? 1 : 0, e.perHand ? 1 : 0, e.perSide ? 1 : 0, e.bodyweight ? 1 : 0, e.note, e.active ? 1 : 0, id);
     return this.planExercise(id);
   }
 

@@ -110,6 +110,7 @@ function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean):
   const rest = restSelect(e.restSeconds, 'Rest between sets');
   const [bwF, bodyweight] = check('Bodyweight', e.bodyweight, 'Weight is what you add (pull-ups, dips)');
   const [phF, perHand] = check('Per hand', e.perHand, 'Weight is one dumbbell');
+  const [psF, perSide] = check('Per side', e.perSide, 'Plates on one side of a plate-loaded machine');
   const [lsF, laterSlot] = check('After the same muscle', e.laterSlot, 'Already worked earlier: the engine expects fewer reps');
   const note = h('input', { class: 'field', type: 'text', dir: 'auto', value: e.note ?? '', placeholder: 'Note (optional)', 'aria-label': 'Note', maxlength: 500 }) as HTMLInputElement;
   const save = async () => {
@@ -117,7 +118,7 @@ function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean):
       () =>
         client.mutation(api.plans.updateExercise, {
           key, exerciseNum: e.num, name: name.value, sets: Number(sets.value), repMin: Number(repMin.value), repMax: Number(repMax.value),
-          step: Number(step.value), restSeconds: Number(rest.value), bodyweight: bodyweight.checked, perHand: perHand.checked, laterSlot: laterSlot.checked, note: note.value,
+          step: Number(step.value), restSeconds: Number(rest.value), bodyweight: bodyweight.checked, perHand: perHand.checked, perSide: perSide.checked, laterSlot: laterSlot.checked, note: note.value,
         }),
       'Saved',
     );
@@ -137,6 +138,7 @@ function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean):
     h('div', { class: 'grid-2' }, stepF, h('label', { class: 'form-field' }, h('span', { class: 'step-label' }, 'Rest'), rest)),
     bwF,
     phF,
+    psF,
     lsF,
     note,
     h(
@@ -154,7 +156,7 @@ function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean):
 
 function exerciseRow(e: Exercise, ctx: Ctx, i: number, count: number): HTMLElement {
   if (editing === e.num) return h('li', { class: 'ex-row open' }, exerciseForm(e, ctx, i === 0, i === count - 1));
-  const extra = [e.bodyweight ? 'bodyweight' : null, e.perHand ? 'per hand' : null].filter(Boolean).join(' · ');
+  const extra = [e.bodyweight ? 'bodyweight' : null, e.perHand ? 'per hand' : null, e.perSide ? 'per side' : null].filter(Boolean).join(' · ');
   return h(
     'li',
     { class: 'ex-row' },

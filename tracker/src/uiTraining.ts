@@ -78,6 +78,7 @@ function exerciseChange(raw: Body, days: number[]): PlanExerciseChange & { goals
   if (raw['step'] !== undefined) change.step = num(raw['step'], 'Weight step', { min: 0.25, max: 50 });
   if (raw['laterSlot'] !== undefined) change.laterSlot = bool(raw['laterSlot'], 'Later slot');
   if (raw['perHand'] !== undefined) change.perHand = bool(raw['perHand'], 'Per hand');
+  if (raw['perSide'] !== undefined) change.perSide = bool(raw['perSide'], 'Per side');
   if (raw['bodyweight'] !== undefined) change.bodyweight = bool(raw['bodyweight'], 'Bodyweight');
   if (raw['active'] !== undefined) change.active = bool(raw['active'], 'Active');
   if (raw['note'] !== undefined) change.note = noteOf(raw['note']);
@@ -168,7 +169,7 @@ export async function trainingRoutes(journal: Journal, method: string, route: st
     }
     if (c.repMax < c.repMin) throw new HttpError(400, 'Highest reps must be at least the lowest');
     const added: PlanExercise = journal.addPlanExercise(
-      { dayId: c.dayId, name: c.name, aliases: c.aliases ?? [], sets: c.sets, repMin: c.repMin, repMax: c.repMax, step: c.step, laterSlot: c.laterSlot ?? false, perHand: c.perHand ?? false, bodyweight: c.bodyweight ?? false, note: c.note ?? null, goals: (c.goals ?? []).filter((g): g is { day: string; weight: number } => g.weight !== null) },
+      { dayId: c.dayId, name: c.name, aliases: c.aliases ?? [], sets: c.sets, repMin: c.repMin, repMax: c.repMax, step: c.step, laterSlot: c.laterSlot ?? false, perHand: c.perHand ?? false, perSide: c.perSide ?? false, bodyweight: c.bodyweight ?? false, note: c.note ?? null, goals: (c.goals ?? []).filter((g): g is { day: string; weight: number } => g.weight !== null) },
       now,
     );
     return done(201, added);

@@ -16,6 +16,8 @@ export interface ExerciseRule {
   bodyweight?: boolean;
   /** Weight is per dumbbell. */
   perHand?: boolean;
+  /** Weight is the plates on one side of a plate-loaded machine. */
+  perSide?: boolean;
 }
 
 /** One session of an exercise: one working weight and the reps of each set. */
@@ -89,10 +91,10 @@ export function verdict(rule: ExerciseRule, weight: number, reps: readonly (numb
 }
 
 /** A weight as the gym says it: "85 kg", "BW", "+5 kg"; per-hand weights say so. */
-export function weightLabel(weight: number, rule: Pick<ExerciseRule, 'bodyweight' | 'perHand'> = {}): string {
+export function weightLabel(weight: number, rule: Pick<ExerciseRule, 'bodyweight' | 'perHand' | 'perSide'> = {}): string {
   const n = String(round(weight));
   if (rule.bodyweight) return weight === 0 ? 'BW' : `${weight > 0 ? '+' : '−'}${String(round(Math.abs(weight)))}`;
-  return `${n} kg${rule.perHand ? ' per hand' : ''}`;
+  return `${n} kg${rule.perHand ? ' per hand' : rule.perSide ? ' per side' : ''}`;
 }
 
 /** Estimated one-rep max from the best set (Epley): weight × (1 + reps/30). For charts only. */
@@ -218,6 +220,10 @@ export function flags(rule: ExerciseRule, sessions: readonly Session[]): Flag[] 
 
 export interface Suggestion {
   weight: number;
+  /** How many working sets to do next time: the plan's, or more while the lift is stalled. */
+  sets: number;
+  /** Why sets differ from the plan's (or went back to it); null when nothing changed. */
+  setsReason: string | null;
   /** The engine's verdict on the last session, or null with no history. */
   verdict: Verdict | null;
   /** That last session. */
@@ -229,6 +235,54 @@ export interface Suggestion {
   lowestOk: number;
 }
 
+/** Most sets the engine adds on top of the plan's. */
+export const MAX_EXTRA_SETS = 2;
+
+/** Working sets done in a session (all of them, not only the plan's). */
+const setsDone = (s: Session) => s.reps.filter((r): r is number => typeof r === 'number' && Number.isFinite(r)).length;
+
+/**
+ * How many sets to do next time. Weight stays the main lever; sets are the second one,
+ * for when weight is stuck (more weekly sets grow more muscle, with diminishing returns):
+ * - add weight or too heavy: back to the plan's sets (a new weight starts fresh);
+ * - same weight, and the last 2 sessions at it beat neither the best total before them:
+ *   one set more than last time, up to the plan's + 2;
+ * - the extra set cost reps (the plan's sets did worse than the session before): one fewer;
+ * - otherwise: as many as last time (never under the plan's).
+ * Only the plan's sets count toward add weight / too heavy, so an extra set never makes a
+ * session look worse. Copied sessions don't count, and a form reset starts the count again.
+ */
+export function nextSets(rule: ExerciseRule, sessions: readonly Session[]): { sets: number; reason: string | null } {
+  const base = Math.max(1, Math.round(rule.sets));
+  const max = base + MAX_EXTRA_SETS;
+  const real = sessions.filter((s) => !s.copied);
+  const last = real.at(-1);
+  if (!last) return { sets: base, reason: null };
+  const v = verdict(rule, last.weight, last.reps);
+  const done = Math.min(max, Math.max(base, setsDone(last)));
+  if (v.kind !== 'HOLD') return { sets: base, reason: done > base ? `Back to ${base} sets at the new weight` : null };
+
+  const run: Session[] = [];
+  for (let i = real.length - 1; i >= 0; i--) {
+    const s = real[i] as Session;
+    if (s.weight !== last.weight) break;
+    run.unshift(s);
+    if (s.formReset) break;
+  }
+  const totals = run.map((s) => totalOf(rule, s));
+  const prev = run.at(-2);
+  if (prev && done > base && setsDone(last) > setsDone(prev) && (totals.at(-1) as number) < (totals.at(-2) as number)) {
+    return { sets: done - 1, reason: `The extra set cost reps: back to ${done - 1}` };
+  }
+  if (run.length >= 3) {
+    const bestBefore = Math.max(...totals.slice(0, -2));
+    if (totals.slice(-2).every((t) => t <= bestBefore) && done < max) {
+      return { sets: done + 1, reason: `Stuck at ${weightLabel(last.weight, rule)} for 2 sessions: add a set` };
+    }
+  }
+  return { sets: done, reason: done > base ? `Keep ${done} sets until the reps move` : null };
+}
+
 /**
  * What to lift next: the verdict on the last session decides the weight. With no history,
  * the plan's starting weight (`start`).
@@ -236,10 +290,12 @@ export interface Suggestion {
 export function suggest(rule: ExerciseRule, sessions: readonly Session[], start: number | null): Suggestion {
   const { threshold, lowestOk } = thresholds(rule);
   const last = sessions.at(-1);
-  if (!last) return { weight: start ?? 0, verdict: null, last: null, beat: null, threshold, lowestOk };
+  const base = Math.max(1, Math.round(rule.sets));
+  if (!last) return { weight: start ?? 0, sets: base, setsReason: null, verdict: null, last: null, beat: null, threshold, lowestOk };
+  const next = nextSets(rule, sessions);
   const v = verdict(rule, last.weight, last.reps);
   const sameWeight = [...sessions].reverse().find((s) => s.weight === v.nextWeight);
-  return { weight: v.nextWeight, verdict: v, last: { day: last.day, weight: last.weight, reps: countedReps(rule, last.reps) }, beat: sameWeight ? countedReps(rule, sameWeight.reps) : null, threshold, lowestOk };
+  return { weight: v.nextWeight, sets: next.sets, setsReason: next.reason, verdict: v, last: { day: last.day, weight: last.weight, reps: countedReps(rule, last.reps) }, beat: sameWeight ? countedReps(rule, sameWeight.reps) : null, threshold, lowestOk };
 }
 
 // ------------------------------------------------------------------ body

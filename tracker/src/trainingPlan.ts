@@ -34,7 +34,7 @@ export interface ExerciseState {
   flags: Flag[];
 }
 
-export const ruleOf = (e: PlanExercise): ExerciseRule => ({ sets: e.sets, repMin: e.repMin, repMax: e.repMax, step: e.step, laterSlot: e.laterSlot, bodyweight: e.bodyweight, perHand: e.perHand });
+export const ruleOf = (e: PlanExercise): ExerciseRule => ({ sets: e.sets, repMin: e.repMin, repMax: e.repMax, step: e.step, laterSlot: e.laterSlot, bodyweight: e.bodyweight, perHand: e.perHand, perSide: e.perSide });
 
 const namesOf = (e: PlanExercise) => [e.name, ...e.aliases];
 

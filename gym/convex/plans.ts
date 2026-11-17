@@ -91,7 +91,7 @@ export const list = query({
                 .sort((a, b) => a.position - b.position || a.num - b.num)
                 .map((e) => ({
                   num: e.num, name: e.name, sets: e.sets, repMin: e.repMin, repMax: e.repMax, step: e.step, restSeconds: e.restSeconds,
-                  bodyweight: e.bodyweight, perHand: e.perHand, laterSlot: e.laterSlot, note: e.note,
+                  bodyweight: e.bodyweight, perHand: e.perHand, perSide: e.perSide ?? false, laterSlot: e.laterSlot, note: e.note,
                 })),
             })),
         })),
@@ -225,11 +225,12 @@ const exerciseChange = {
   restSeconds: v.optional(v.number()),
   bodyweight: v.optional(v.boolean()),
   perHand: v.optional(v.boolean()),
+  perSide: v.optional(v.boolean()),
   laterSlot: v.optional(v.boolean()),
   note: v.optional(nullable(v.string())),
 };
 
-type Change = { name?: string; sets?: number; repMin?: number; repMax?: number; step?: number; restSeconds?: number; bodyweight?: boolean; perHand?: boolean; laterSlot?: boolean; note?: string | null };
+type Change = { name?: string; sets?: number; repMin?: number; repMax?: number; step?: number; restSeconds?: number; bodyweight?: boolean; perHand?: boolean; perSide?: boolean; laterSlot?: boolean; note?: string | null };
 
 /** The checked shape of an exercise after a change. */
 function checked(e: Required<Omit<Change, 'note'>> & { note: string | null }) {
@@ -242,6 +243,7 @@ function checked(e: Required<Omit<Change, 'note'>> & { note: string | null }) {
     restSeconds: whole(e.restSeconds, 10, 900, 'Rest (seconds)'),
     bodyweight: e.bodyweight,
     perHand: e.perHand,
+    perSide: e.perSide,
     laterSlot: e.laterSlot,
     note: e.note === null || !e.note.trim() ? null : name(e.note, 'Note', 500),
   };
@@ -255,7 +257,7 @@ export const addExercise = mutation({
   handler: async (ctx, { key, dayNum, ...change }) => {
     checkGymKey(key);
     await dayByNum(ctx, dayNum);
-    const fields = checked({ sets: 3, repMin: 8, repMax: 12, step: 2.5, restSeconds: 90, bodyweight: false, perHand: false, laterSlot: false, note: null, ...change });
+    const fields = checked({ sets: 3, repMin: 8, repMax: 12, step: 2.5, restSeconds: 90, bodyweight: false, perHand: false, perSide: false, laterSlot: false, note: null, ...change });
     const siblings = await exercisesOf(ctx, dayNum);
     const num = await nextNum(ctx);
     await ctx.db.insert('planExercises', {
@@ -271,7 +273,7 @@ export const updateExercise = mutation({
     checkGymKey(key);
     const e = await exerciseByNum(ctx, exerciseNum);
     const defined = Object.fromEntries(Object.entries(change).filter(([, x]) => x !== undefined)) as Change;
-    await ctx.db.patch(e._id, checked({ ...e, ...defined }));
+    await ctx.db.patch(e._id, checked({ ...e, perSide: e.perSide ?? false, ...defined }));
   },
 });
 
