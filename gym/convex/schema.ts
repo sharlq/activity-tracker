@@ -62,6 +62,8 @@ export const planExerciseFields = {
   step: v.number(),
   laterSlot: v.boolean(),
   perHand: v.boolean(),
+  /** Weight is the plates on one side of a plate-loaded machine; missing is false. */
+  perSide: v.optional(v.boolean()),
   bodyweight: v.boolean(),
   note: nullable(v.string()),
   active: v.boolean(),

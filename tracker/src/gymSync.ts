@@ -75,7 +75,7 @@ export function collectForGym(dbFile: string) {
       return {
         num: r['id'] as number, dayNum: r['day_id'] as number, position: r['position'] as number, name: r['name'] as string, aliases,
         sets: r['sets'] as number, repMin: r['rep_min'] as number, repMax: r['rep_max'] as number, step: r['step_kg'] as number,
-        laterSlot, perHand: r['per_hand'] === 1, bodyweight: r['bodyweight'] === 1, note, active: r['active'] === 1,
+        laterSlot, perHand: r['per_hand'] === 1, perSide: r['per_side'] === 1, bodyweight: r['bodyweight'] === 1, note, active: r['active'] === 1,
         restSeconds: restFrom(r['name'] as string, note, laterSlot),
         goals: goals.filter((g) => g['id'] === r['id']).map((g) => ({ day: g['day'] as string, weight: g['weight'] as number })),
       };

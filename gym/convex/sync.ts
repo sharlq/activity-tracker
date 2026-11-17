@@ -5,6 +5,7 @@ import { mutation, query } from './_generated/server';
 import { checkSyncKey } from './access';
 import { nextNum } from './lib/nums';
 import { planExerciseFields, workoutFields } from './schema';
+import { MACHINE_SWAPS, machineFor } from '../../tracker/src/machineSwap.ts';
 
 const nullable = <T extends Parameters<typeof v.union>[0]>(t: T) => v.union(t, v.null());
 
@@ -132,7 +133,23 @@ export const importPlan = mutation({
     for (const [i, d] of days.entries()) {
       const dayNum = await nextNum(ctx);
       await ctx.db.insert('planDays', { num: dayNum, planNum, name: d.name, position: i + 1, note: null });
-      for (const [j, x] of d.exercises.entries()) {
+      let position = 0;
+      const machines = new Set<string>();
+      for (const x of d.exercises) {
+        // Lifts the gym's machines replaced (machineSwap.ts) come in as the machine, once a day.
+        const m = machineFor(x.name);
+        if (m) {
+          if (machines.has(m.name)) continue;
+          machines.add(m.name);
+          position++;
+          await ctx.db.insert('planExercises', {
+            num: await nextNum(ctx), dayNum, position, name: m.name, active: true, aliases: [], sets: m.sets, laterSlot: position > 1 && m.laterSlot,
+            repMin: m.repMin, repMax: m.repMax, step: m.step, perHand: false, perSide: m.perSide, bodyweight: false, note: m.note, restSeconds: m.restSeconds, goals: [],
+          });
+          made.push({ day: d.name, name: m.name, sets: m.sets, reps: `${m.repMin}–${m.repMax}`, known: false });
+          continue;
+        }
+        const j = position++;
         const like = known.get(x.name.toLowerCase());
         const row = {
           num: await nextNum(ctx), dayNum, position: j + 1, name: x.name, active: true,
@@ -140,7 +157,7 @@ export const importPlan = mutation({
           // The first lift of a day is never in a later slot; the rest keep the other plan's.
           sets: x.sets, laterSlot: j > 0 && (like?.laterSlot ?? false),
           repMin: like?.repMin ?? x.repMin, repMax: like?.repMax ?? x.repMax, step: like?.step ?? 2.5,
-          perHand: like?.perHand ?? false, bodyweight: like?.bodyweight ?? false,
+          perHand: like?.perHand ?? false, perSide: like?.perSide ?? false, bodyweight: like?.bodyweight ?? false,
           // Notes like "After bench" belong to the other plan's order.
           note: like?.note && !/^after\b/i.test(like.note) ? like.note : null,
           restSeconds: like?.restSeconds ?? 90, goals: like?.goals ?? [],
@@ -161,5 +178,44 @@ export const changedSince = query({
     // Filter before take, so 200 PC workouts can't hide the phone's.
     const rows = await ctx.db.query('workouts').withIndex('by_updated', (q) => q.gt('updatedAt', since)).filter((q) => q.eq(q.field('origin'), 'gym')).take(200);
     return rows.map(({ _id, _creationTime, ...w }) => w);
+  },
+});
+
+/**
+ * The gym's machines replace three lifts in every plan (tracker/src/machineSwap.ts): on each
+ * day with any of the old lifts, the machine goes in the first one's place and the old ones
+ * are archived (active: false), never deleted, so workouts keep their names and history. The
+ * machines start fresh: no aliases, no goals. dryRun reports the same without writing.
+ * Running it again changes nothing.
+ */
+export const swapToMachines = mutation({
+  args: { key: v.string(), dryRun: v.boolean() },
+  handler: async (ctx, { key, dryRun }) => {
+    checkSyncKey(key);
+    const plans = await ctx.db.query('plans').collect();
+    const days = await ctx.db.query('planDays').collect();
+    const exercises = await ctx.db.query('planExercises').collect();
+    const changes: { plan: string; active: boolean; day: string; archived: { name: string; position: number }[]; added: string; position: number }[] = [];
+    for (const d of [...days].sort((a, b) => a.planNum - b.planNum || a.position - b.position)) {
+      const plan = plans.find((p) => p.num === d.planNum);
+      const mine = exercises.filter((e) => e.dayNum === d.num && e.active);
+      for (const { replaces, exercise: m } of MACHINE_SWAPS) {
+        const names = new Set(replaces.map((r) => r.toLowerCase()));
+        const old = mine.filter((e) => names.has(e.name.toLowerCase())).sort((a, b) => a.position - b.position);
+        if (!old.length) continue;
+        const position = (old[0] as (typeof old)[number]).position;
+        const already = mine.some((e) => e.name.toLowerCase() === m.name.toLowerCase());
+        changes.push({ plan: plan?.name ?? '?', active: !!plan?.active, day: d.name, archived: old.map((e) => ({ name: e.name, position: e.position })), added: already ? '' : m.name, position });
+        if (dryRun) continue;
+        for (const e of old) await ctx.db.patch(e._id, { active: false });
+        if (!already) {
+          await ctx.db.insert('planExercises', {
+            num: await nextNum(ctx), dayNum: d.num, position, name: m.name, aliases: [], sets: m.sets, repMin: m.repMin, repMax: m.repMax, step: m.step,
+            laterSlot: m.laterSlot, perHand: false, perSide: m.perSide, bodyweight: false, note: m.note, active: true, restSeconds: m.restSeconds, goals: [],
+          });
+        }
+      }
+    }
+    return { dryRun, changes };
   },
 });

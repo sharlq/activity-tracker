@@ -3627,7 +3627,7 @@ const VERDICT = {
   TOO_HEAVY: ['Too heavy', 'danger'],
 };
 const GOAL_STATUS = { ahead: ['Ahead', 'good', '▲'], 'on track': ['On track', 'accent', '●'], behind: ['Behind', 'danger', '▼'] };
-const wLabel = (w, e) => (e.bodyweight ? (w === 0 ? 'BW' : `${w > 0 ? '+' : '−'}${n1(Math.abs(w))}`) : `${n1(w)} kg${e.perHand ? ' per hand' : ''}`);
+const wLabel = (w, e) => (e.bodyweight ? (w === 0 ? 'BW' : `${w > 0 ? '+' : '−'}${n1(Math.abs(w))}`) : `${n1(w)} kg${e.perHand ? ' per hand' : e.perSide ? ' per side' : ''}`);
 const verdictBadge = (v) => (v ? h('span', { class: `badge ${VERDICT[v.kind][1]}` }, VERDICT[v.kind][0]) : null);
 const statusBadge = (p) => (p ? h('span', { class: `badge ${GOAL_STATUS[p.status][1]}`, title: `Expected now: ${n1(p.expected)} kg` }, `${GOAL_STATUS[p.status][2]} ${GOAL_STATUS[p.status][0]}`) : h('span', { class: 'badge' }, 'No data'));
 const repsText = (reps) => (reps?.length ? reps.join('/') : '—');
@@ -3792,7 +3792,7 @@ function todayExerciseCard(x, v) {
   const lastLogged = x.logged.at(-1);
   const weight = h('input', {
     type: 'number', min: 0, step: e.step, inputmode: 'decimal', class: 'num-in weight-in',
-    value: lastLogged ? (lastLogged.weight ?? 0) : sug.weight, 'aria-label': `Weight for ${e.name}${e.perHand ? ', per hand' : ''}`,
+    value: lastLogged ? (lastLogged.weight ?? 0) : sug.weight, 'aria-label': `Weight for ${e.name}${e.perHand ? ', per hand' : e.perSide ? ', per side' : ''}`,
   });
   const beatHere = sug.beat?.[setIndex];
   const reps = stepper(beatHere ?? lastLogged?.reps ?? e.repMin, { min: 0, max: 100, label: `Reps for set ${setIndex + 1}` });
@@ -3821,9 +3821,10 @@ function todayExerciseCard(x, v) {
           h('span', { class: 'badge' }, target),
           e.laterSlot ? h('span', { class: 'badge dawn', title: `A muscle it trains was already worked this session, so the target is lowered: add weight at ${sug.threshold} total reps, no set under ${sug.lowestOk}.` }, 'Later slot · target lowered') : null,
           e.perHand ? h('span', { class: 'badge' }, 'Per hand') : null,
+          e.perSide ? h('span', { class: 'badge' }, 'Per side') : null,
           e.bodyweight ? h('span', { class: 'badge' }, 'Weight = added load') : null,
         )),
-      h('div', { class: 'suggest' }, h('div', { class: 'big num' }, s.suggestedLabel), h('div', { class: 'hint' }, sug.beat ? `Beat ${repsText(sug.beat)}` : sug.verdict ? 'New weight: aim for the bottom of the range' : 'Starting weight from the plan')),
+      h('div', { class: 'suggest' }, h('div', { class: 'big num' }, s.suggestedLabel), h('div', { class: 'hint' }, `${sug.sets} × ${e.repMin}–${e.repMax}${sug.setsReason ? ` · ${sug.setsReason}` : ''}`), h('div', { class: 'hint' }, sug.beat ? `Beat ${repsText(sug.beat)}` : sug.verdict ? 'New weight: aim for the bottom of the range' : 'Starting weight from the plan')),
     ),
     sug.verdict && sug.last
       ? h('p', { class: 'hint' }, `Last time (${shortDay(sug.last.day)}): ${wLabel(sug.last.weight, e)} × ${repsText(sug.last.reps)} → `, h('b', {}, sug.verdict.message), s.comparedWith === 'history' ? ' (from imported history)' : '')
@@ -3841,7 +3842,7 @@ function todayExerciseCard(x, v) {
             : null)
       : null,
     h('div', { class: 'row log-row' },
-      h('label', { class: 'field' }, h('span', {}, e.bodyweight ? 'Added kg' : e.perHand ? 'kg per hand' : 'kg'), weight),
+      h('label', { class: 'field' }, h('span', {}, e.bodyweight ? 'Added kg' : e.perHand ? 'kg per hand' : e.perSide ? 'kg per side' : 'kg'), weight),
       h('div', { class: 'field' }, h('span', {}, `Reps, set ${setIndex + 1}${done ? ' (extra)' : ''}`), reps.el),
       h('button', { class: `btn ${done ? '' : 'primary'} big`, onclick: log }, done ? 'Log extra set' : `Log set ${setIndex + 1} of ${e.sets}`),
       h('label', { class: 'check', title: 'You lowered the weight on purpose because form broke: not counted as a regression.' }, formReset, ' Form reset'),
@@ -4098,11 +4099,11 @@ async function exercisePage(id) {
   return [
     h('div', { class: 'page-head' },
       h('div', {}, h('p', {}, h('a', { href: '#health' }, 'Health'), ' › ', v.day), h('h1', {}, e.name),
-        h('p', {}, `${e.sets} × ${e.repMin}–${e.repMax} · step ${n1(e.step)} kg${e.laterSlot ? ' · later slot' : ''}${e.perHand ? ' · per hand' : ''}${e.bodyweight ? ' · weight = added load' : ''}`)),
+        h('p', {}, `${e.sets} × ${e.repMin}–${e.repMax} · step ${n1(e.step)} kg${e.laterSlot ? ' · later slot' : ''}${e.perHand ? ' · per hand' : ''}${e.perSide ? ' · per side' : ''}${e.bodyweight ? ' · weight = added load' : ''}`)),
       statusBadge(p),
     ),
     h('div', { class: 'stats' },
-      stat('Next time', v.suggestedLabel, sug.beat ? `beat ${repsText(sug.beat)}` : sug.verdict ? sug.verdict.message : 'from the plan'),
+      stat('Next time', `${v.suggestedLabel} × ${sug.sets} sets`, sug.setsReason ? sug.setsReason : sug.beat ? `beat ${repsText(sug.beat)}` : sug.verdict ? sug.verdict.message : 'from the plan'),
       stat('Now', v.currentLabel ?? '—', sug.verdict && sug.last ? h('span', {}, verdictBadge(sug.verdict), ` ${repsText(sug.last.reps)} on ${shortDay(sug.last.day)}`) : 'no sessions yet'),
       stat('Goal', p ? wLabel(p.goal.weight, e) : '—', p ? `by ${shortDay(p.goal.day)} · ${pct(p.ratio)} · expected now ${wLabel(Math.round(p.expected * 2) / 2, e)}` : null),
       stat('Add weight at', `${sug.threshold} reps`, `total; no set under ${sug.lowestOk}${e.laterSlot ? ' (lowered: later slot)' : ''}`),
@@ -4142,6 +4143,7 @@ function exerciseEditCard(v) {
   const [stepF, step] = field('Step kg', e.step, 0.5);
   const later = h('input', { type: 'checkbox', checked: e.laterSlot });
   const perHand = h('input', { type: 'checkbox', checked: e.perHand });
+  const perSide = h('input', { type: 'checkbox', checked: e.perSide });
   const aliases = h('input', { type: 'text', value: e.aliases.join(', '), placeholder: 'Other names in your history, comma separated' });
   const goals = v.checkpoints.map((c) => [c, h('input', { type: 'number', value: c.weight, step: e.step, min: 0, class: 'num-in', 'aria-label': `Goal at ${c.label}` })]);
   const save = oneAtATime(async () => {
@@ -4149,7 +4151,7 @@ function exerciseEditCard(v) {
       await api(`/training/exercises/${e.id}`, {
         method: 'PATCH',
         body: {
-          sets: Number(sets.value), repMin: Number(lo.value), repMax: Number(hi.value), step: Number(step.value), laterSlot: later.checked, perHand: perHand.checked,
+          sets: Number(sets.value), repMin: Number(lo.value), repMax: Number(hi.value), step: Number(step.value), laterSlot: later.checked, perHand: perHand.checked, perSide: perSide.checked,
           aliases: aliases.value.split(',').map((a) => a.trim()).filter(Boolean),
           goals: goals.map(([c, input]) => ({ day: c.day, weight: input.value === '' ? null : Number(input.value) })),
         },
@@ -4161,7 +4163,7 @@ function exerciseEditCard(v) {
     }
   });
   return card('Edit in the plan', null,
-    h('div', { class: 'row', style: { alignItems: 'flex-end' } }, setsF, loF, hiF, stepF, h('label', { class: 'check' }, later, ' Later slot'), h('label', { class: 'check' }, perHand, ' Per hand')),
+    h('div', { class: 'row', style: { alignItems: 'flex-end' } }, setsF, loF, hiF, stepF, h('label', { class: 'check' }, later, ' Later slot'), h('label', { class: 'check' }, perHand, ' Per hand'), h('label', { class: 'check' }, perSide, ' Per side')),
     h('label', { class: 'field', style: { marginTop: '10px' } }, h('span', {}, 'Also called'), aliases),
     h('div', { class: 'table-wrap', style: { marginTop: '10px' } }, h('table', { class: 'plan-table goal-table' },
       h('thead', {}, h('tr', {}, goals.map(([c]) => h('th', {}, c.label)))),

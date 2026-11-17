@@ -49,7 +49,7 @@ export const planDayOf = (d: Doc<'planDays'>): PlanDay => ({ id: d.num, name: d.
 
 export const planExerciseOf = (e: Doc<'planExercises'>): PlanExercise => ({
   id: e.num, dayId: e.dayNum, position: e.position, name: e.name, aliases: e.aliases, sets: e.sets, repMin: e.repMin, repMax: e.repMax,
-  step: e.step, laterSlot: e.laterSlot, perHand: e.perHand, bodyweight: e.bodyweight, note: e.note, active: e.active,
+  step: e.step, laterSlot: e.laterSlot, perHand: e.perHand, perSide: e.perSide ?? false, bodyweight: e.bodyweight, note: e.note, active: e.active,
   goals: [...e.goals].sort((a, b) => a.day.localeCompare(b.day)),
 });
 

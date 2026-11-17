@@ -257,7 +257,8 @@ function plan(args: string[]): number {
         const sug = s.suggestion;
         const beat = sug.beat ? `, beat ${sug.beat.join('/')}` : '';
         const later = s.exercise.laterSlot ? ' [later slot: lower target]' : '';
-        console.log(`  ${s.exercise.position}. ${s.exercise.name}: ${s.suggestedLabel}, ${s.exercise.sets} × ${s.exercise.repMin}–${s.exercise.repMax}${beat}${later}`);
+        console.log(`  ${s.exercise.position}. ${s.exercise.name}: ${s.suggestedLabel}, ${sug.sets} × ${s.exercise.repMin}–${s.exercise.repMax}${beat}${later}`);
+        if (sug.setsReason) console.log(`     sets: ${sug.setsReason}`);
         if (sug.verdict && sug.last) console.log(`     last (${sug.last.day}): ${weightLabel(sug.last.weight, s.rule)} × ${sug.last.reps.join('/')} → ${sug.verdict.message}`);
         if (e.logged.length) console.log(`     today: ${e.logged.map((x) => `${x.reps}@${weightLabel(x.weight ?? 0, s.rule)}`).join(', ')}${e.now ? ` → ${e.now.message}` : ''}`);
         for (const f of s.flags) console.log(`     ! ${f.message}`);

@@ -2,6 +2,7 @@
 // which is why 'setEnd' can target MAX(id) and the store needs no extra state.
 import Database from 'better-sqlite3';
 import type { Activity, Op, OpenEvent, WindowInfo } from './merger.ts';
+import { machineSwapSql } from './machineSwap.ts';
 import { seedSql } from './trainingSeed.ts';
 
 const MIGRATIONS: string[] = [
@@ -322,6 +323,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE weigh_ins ADD COLUMN note TEXT;
 
   ${seedSql(Date.now())}
+  `,
+  // The gym's machines replace three lifts (see machineSwap.ts): weights can be per side of a
+  // plate-loaded machine, and the old lifts are archived, never deleted, so their history stays.
+  `
+  ALTER TABLE plan_exercises ADD COLUMN per_side INTEGER NOT NULL DEFAULT 0;
+  ${machineSwapSql(Date.now())}
   `,
 ];
 

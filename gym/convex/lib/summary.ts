@@ -27,7 +27,7 @@ export interface SummaryExercise {
   topLabel: string | null;
   volume: number;
   /** The engine's call on today's sets: the weight for next time. */
-  next: Pick<Verdict, 'kind' | 'message' | 'nextWeight'> & { nextLabel: string } | null;
+  next: Pick<Verdict, 'kind' | 'message' | 'nextWeight'> & { nextLabel: string; nextSets: number; setsReason: string | null } | null;
   record: { kind: 'weight' | 'e1rm'; label: string; before: string } | null;
   progress: GoalProgress | null;
 }
@@ -89,6 +89,8 @@ export function summarize(source: TrainingSource, w: SummaryWorkout, previous: S
     const top = withWeight.length ? Math.max(...withWeight.map((s) => s.weight as number)) : null;
     const reps = top === null ? [] : withWeight.filter((s) => s.weight === top).map((s) => s.reps as number);
     const v = top === null ? null : verdict(rule, top, reps);
+    // The suggestion with this workout counted: how many sets next time.
+    const after = top === null ? null : exerciseState(e, dayName, history, w.day).suggestion;
 
     // A record: heavier than ever, else a higher estimated one-rep max, against earlier sessions.
     const before = state.sessions.filter((s) => s.workoutId !== w.num && s.day <= w.day && !s.copied);
@@ -103,13 +105,13 @@ export function summarize(source: TrainingSource, w: SummaryWorkout, previous: S
     return {
       name: e.name,
       inPlan: true,
-      plannedSets: e.sets,
+      plannedSets: state.suggestion.sets,
       repRange: `${e.repMin}–${e.repMax}`,
       aimLabel: state.suggestedLabel,
       logged: mine.map((s) => ({ weight: s.weight, reps: s.reps })),
       topLabel: top === null ? null : weightLabel(top, rule),
       volume: volumeOf(mine),
-      next: v ? { kind: v.kind, message: v.message, nextWeight: v.nextWeight, nextLabel: weightLabel(v.nextWeight, rule) } : null,
+      next: v ? { kind: v.kind, message: v.message, nextWeight: v.nextWeight, nextLabel: weightLabel(v.nextWeight, rule), nextSets: after?.sets ?? e.sets, setsReason: after?.setsReason ?? null } : null,
       record,
       progress: top === null ? state.progress : goalProgress(e.goals, w.day, top, e.step),
     };

@@ -204,3 +204,29 @@ describe('copied sessions', () => {
     assert.deepEqual([...copiedRuns([a, a, a, b, b])], []);
   });
 });
+
+it('nextSets: a set more when stuck, back to the plan at a new weight, one fewer when the extra set costs reps', async () => {
+  const { nextSets, suggest } = await import('./progression.ts');
+  const rule = { sets: 3, repMin: 8, repMax: 12, step: 2.5, laterSlot: false };
+  const at = (day: string, weight: number, reps: number[]) => ({ day, weight, reps });
+  const stuck = [at('01', 22.5, [9, 8, 8]), at('02', 22.5, [8, 8, 8]), at('03', 22.5, [8, 8, 9])];
+  assert.deepEqual(nextSets(rule, []), { sets: 3, reason: null });
+  assert.deepEqual(nextSets(rule, stuck.slice(0, 2)), { sets: 3, reason: null });
+  assert.equal(nextSets(rule, stuck).sets, 4);
+  assert.equal(suggest(rule, stuck, null).sets, 4);
+  // Doing 4: the extra set doesn't count toward the verdict, and they're kept while reps move.
+  const four = [...stuck, at('04', 22.5, [9, 9, 8, 6])];
+  assert.deepEqual(nextSets(rule, four), { sets: 4, reason: 'Keep 4 sets until the reps move' });
+  // The extra set cost reps on the plan's sets: back one.
+  assert.equal(nextSets(rule, [...stuck, at('04', 22.5, [8, 7, 8, 6])]).sets, 3);
+  // Stuck again at 4: a fifth, but never past plan + 2.
+  const stuck4 = [...four, at('05', 22.5, [9, 8, 8, 6]), at('06', 22.5, [8, 9, 8, 6])];
+  assert.equal(nextSets(rule, stuck4).sets, 5);
+  const five = [...stuck4, at('07', 22.5, [9, 8, 8, 7, 6]), at('08', 22.5, [8, 9, 8, 6, 6]), at('09', 22.5, [9, 9, 8, 6, 5])];
+  assert.equal(nextSets(rule, five).sets, 5);
+  // Earning weight or too heavy: the plan's 3.
+  assert.deepEqual(nextSets(rule, [...four, at('05', 22.5, [12, 11, 10, 8])]), { sets: 3, reason: 'Back to 3 sets at the new weight' });
+  assert.equal(nextSets(rule, [...four, at('05', 25, [7, 5, 4, 3])]).sets, 3);
+  // Copied sessions don't make a stall.
+  assert.equal(nextSets(rule, stuck.map((s, i) => ({ ...s, copied: i > 0 }))).sets, 3);
+});

@@ -31,6 +31,8 @@ export interface PlanExercise {
   step: number;
   laterSlot: boolean;
   perHand: boolean;
+  /** Plates loaded on one side of a plate-loaded machine (no bar weight). */
+  perSide: boolean;
   bodyweight: boolean;
   note: string | null;
   active: boolean;
