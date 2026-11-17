@@ -100,7 +100,7 @@ export function collectForGym(dbFile: string) {
       sets: sets.filter((s) => s['workout_id'] === w['id']).map((s) => ({
         num: s['id'] as number, exercise: s['exercise'] as string, position: s['position'] as number, setNo: s['set_no'] as number,
         reps: (s['reps'] as number | null) ?? null, weight: (s['weight_kg'] as number | null) ?? null, rpe: (s['rpe'] as number | null) ?? null,
-        seconds: (s['seconds'] as number | null) ?? null, distance: (s['distance_m'] as number | null) ?? null, flag: (s['flag'] as string | null) ?? null, at: null,
+        seconds: (s['seconds'] as number | null) ?? null, distance: (s['distance_m'] as number | null) ?? null, flag: (s['flag'] as string | null) ?? null, at: (s['logged_ms'] as number | null) ?? null,
       })),
       logs: logs.filter((l) => l['workout_id'] === w['id']).map((l) => ({ exercise: l['exercise'] as string, formReset: l['form_reset'] === 1, note: (l['note'] as string | null) ?? null })),
       createdAt: w['created_ms'] as number, updatedAt: w['created_ms'] as number, origin: 'pc' as const,
@@ -171,8 +171,8 @@ export function applyGymWorkouts(dbFile: string, workouts: GymWorkout[]): { save
     };
     const addWorkout = db.prepare(`INSERT INTO workouts (id, day, start_ms, name, kind, minutes, calories, note, source, external_id, created_ms, plan_day_id)
       VALUES (@id, @day, @start, @name, @kind, @minutes, @calories, @note, @source, @externalId, @createdAt, @planDayNum)`);
-    const addSet = db.prepare(`INSERT INTO workout_sets (id, workout_id, position, exercise, set_no, reps, weight_kg, rpe, seconds, distance_m, flag)
-      VALUES (@num, @workout, @position, @exercise, @setNo, @reps, @weight, @rpe, @seconds, @distance, @flag)`);
+    const addSet = db.prepare(`INSERT INTO workout_sets (id, workout_id, position, exercise, set_no, reps, weight_kg, rpe, seconds, distance_m, flag, logged_ms)
+      VALUES (@num, @workout, @position, @exercise, @setNo, @reps, @weight, @rpe, @seconds, @distance, @flag, @at)`);
     const addLog = db.prepare('INSERT OR REPLACE INTO exercise_logs (workout_id, exercise, form_reset, note) VALUES (?, ?, ?, ?)');
     db.transaction(() => {
       for (const w of workouts) {

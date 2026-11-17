@@ -116,7 +116,7 @@ export function planStates(journal: TrainingSource, today: string): { days: Plan
 export interface TodayExercise {
   state: ExerciseState;
   /** What's logged today for it, set by set. */
-  logged: { id: number; weight: number | null; reps: number | null }[];
+  logged: { id: number; weight: number | null; reps: number | null; at: number | null }[];
   /** The verdict on today's sets so far, once there's at least one. */
   now: Verdict | null;
   formReset: boolean;
@@ -147,7 +147,7 @@ export function todayView(journal: TrainingSource, date: string, dayId: number):
       const state = exerciseState(e, day.name, sets, date, workout ? { before: workout.id } : {});
       const names = new Set(namesOf(e).map((n) => n.toLowerCase()));
       const mine = sets.filter((s) => s.workoutId === workout?.id && names.has(s.exercise.toLowerCase()));
-      const logged = mine.map((s) => ({ id: s.setId, weight: s.weight, reps: s.reps }));
+      const logged = mine.map((s) => ({ id: s.setId, weight: s.weight, reps: s.reps, at: s.at ?? null }));
       const weight = logged.at(-1)?.weight ?? (e.bodyweight ? 0 : null);
       const reps = logged.filter((s) => s.reps !== null && (s.weight ?? (e.bodyweight ? 0 : null)) === weight).map((s) => s.reps);
       return {

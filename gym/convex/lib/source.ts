@@ -80,7 +80,7 @@ export function sourceOf(data: Loaded, planNum: number | null = activePlan(data)
           const log = w.logs.find((l) => l.exercise.toLowerCase() === s.exercise.toLowerCase());
           out.push({
             setId: s.num, workoutId: w.num, day: w.day, planDayId: w.planDayNum !== null && dayIds.has(w.planDayNum) ? w.planDayNum : null, source: w.source, exercise: s.exercise, setNo: s.setNo,
-            reps: s.reps, weight: s.weight, flag: s.flag, formReset: log?.formReset ?? false, note: log?.note ?? null,
+            reps: s.reps, weight: s.weight, flag: s.flag, formReset: log?.formReset ?? false, note: log?.note ?? null, at: s.at,
           });
         }
       }
