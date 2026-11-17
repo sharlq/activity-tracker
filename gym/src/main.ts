@@ -1,5 +1,6 @@
 // رقيب at the gym. Screens on the hash: today's plan day a set at a time (#/), a workout's
-// summary (#/summary/<num>), past workouts (#/history), and plans (#/plans, #/plans/<num>,
+// summary (#/summary/<num>), past workouts (#/history), strength score and balance
+// (#/strength, in strength.ts), and plans (#/plans, #/plans/<num>,
 // in plans.ts). The plans and the engine's suggestions come from Convex; the rest timer
 // runs here (timer.ts).
 import { ConvexClient } from 'convex/browser';
@@ -8,6 +9,8 @@ import { api } from '../convex/_generated/api';
 import './style.css';
 import type { PlanList } from './plans.ts';
 import { planEditor, plansScreen } from './plans.ts';
+import type { StrengthResult } from './strength.ts';
+import { bodyweightChoice, standardsChoice, strengthScreen } from './strength.ts';
 import { addRest, canKeepAwake, keepingAwake, mmss, onRest, remaining, restNow, setKeepAwake, startRest, stopRest, unlockSound } from './timer.ts';
 import { attempt, h, message, n1, store, thousands, toast } from './ui.ts';
 
@@ -52,6 +55,14 @@ let pendingId = 0;
 let unsubscribe: (() => void) | null = null;
 let online = true;
 let plans: PlanList | undefined;
+let strength: StrengthResult | undefined;
+
+function renderStrength(): void {
+  if (route().name !== 'strength' || !strength) return;
+  const y = window.scrollY;
+  app.replaceChildren(...strengthScreen(strength, { rerender: renderStrength, refresh: start }));
+  window.scrollTo(0, y);
+}
 
 function renderPlans(): void {
   const r = route();
@@ -66,7 +77,7 @@ function renderPlans(): void {
 
 const app = document.getElementById('app') as HTMLElement;
 
-type Route = { name: 'today' } | { name: 'summary'; num: number } | { name: 'history' } | { name: 'plans' } | { name: 'plan'; num: number };
+type Route = { name: 'today' } | { name: 'summary'; num: number } | { name: 'history' } | { name: 'strength' } | { name: 'plans' } | { name: 'plan'; num: number };
 
 function route(): Route {
   const m = /^#\/summary\/(\d+)$/.exec(location.hash);
@@ -75,6 +86,7 @@ function route(): Route {
   if (p) return { name: 'plan', num: Number(p[1]) };
   if (location.hash === '#/plans') return { name: 'plans' };
   if (location.hash === '#/history') return { name: 'history' };
+  if (location.hash === '#/strength') return { name: 'strength' };
   return { name: 'today' };
 }
 
@@ -109,6 +121,15 @@ function start(): void {
     watch<PlanList>((cb, err) => client.onUpdate(api.plans.list, { key: k }, cb, err), (v) => {
       plans = v;
       renderPlans();
+    });
+  } else if (r.name === 'strength') {
+    const k = key;
+    const bodyweight = bodyweightChoice();
+    if (strength) renderStrength();
+    else app.replaceChildren(h('p', { class: 'muted pad' }, 'Working out your scores…'));
+    watch<StrengthResult>((cb, err) => client.onUpdate(api.strength.scores, { key: k, date: localDay(), standards: standardsChoice(), ...(bodyweight !== undefined ? { bodyweight } : {}) }, cb, err), (v) => {
+      strength = v;
+      renderStrength();
     });
   } else if (r.name === 'summary') {
     const k = key;
@@ -407,7 +428,7 @@ function todayScreen(): HTMLElement[] {
         'div',
         { class: 'top-row' },
         h('div', null, h('p', { class: 'eyebrow' }, `${shortDay(t.date)} · `, h('a', { href: `#/plans/${t.plan.num}`, class: 'plan-link' }, t.plan.name)), h('h1', null, t.day.name)),
-        h('div', { class: 'row tight' }, h('a', { class: 'btn ghost small', href: '#/plans' }, 'Plans'), h('a', { class: 'btn ghost small', href: '#/history' }, 'Past')),
+        h('div', { class: 'row tight' }, h('a', { class: 'btn ghost small', href: '#/strength' }, 'Strength'), h('a', { class: 'btn ghost small', href: '#/plans' }, 'Plans'), h('a', { class: 'btn ghost small', href: '#/history' }, 'Past')),
       ),
       h(
         'div',
@@ -495,7 +516,7 @@ function renderSummary(s: Summary): void {
         );
       }),
       skipped.length ? h('p', { class: 'muted small skipped-list' }, h('strong', null, 'Not done: '), skipped.map((e) => e.name).join(', ')) : null,
-      h('div', { class: 'row-buttons' }, h('a', { class: 'btn big', href: '#/' }, 'Back to today'), h('a', { class: 'btn big', href: '#/history' }, 'Past workouts')),
+      h('div', { class: 'row-buttons' }, h('a', { class: 'btn big', href: '#/' }, 'Back to today'), h('a', { class: 'btn big', href: '#/history' }, 'Past workouts'), h('a', { class: 'btn big', href: '#/strength' }, 'Strength score')),
     ),
   );
 }

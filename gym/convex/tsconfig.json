@@ -15,6 +15,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["./**/*", "../../tracker/src/trainingPlan.ts", "../../tracker/src/progression.ts", "../../tracker/src/trainingTypes.ts"],
+  "include": ["./**/*", "../../tracker/src/trainingPlan.ts", "../../tracker/src/progression.ts", "../../tracker/src/trainingTypes.ts", "../../tracker/src/strength.ts"],
   "exclude": ["./_generated"]
 }
