@@ -773,7 +773,9 @@ pre.code { background: var(--panel-2); border: 1px solid var(--line); border-rad
 .bf-none { fill: var(--bf-core); stroke-dasharray: 2.5 1.5; }
 .bf-l0 { fill: var(--bf-l0); } .bf-l1 { fill: var(--bf-l1); } .bf-l2 { fill: var(--bf-l2); }
 .bf-l3 { fill: var(--bf-l3); } .bf-l4 { fill: var(--bf-l4); } .bf-l5 { fill: var(--bf-l5); }
-.bf-m.bf-on { stroke: var(--ink); stroke-width: 2.5; }
+/* The picked group keeps its own thin outline; the rest fade back so it stands out. */
+.bf-m.bf-on { stroke: var(--bf-edge); stroke-width: 1; }
+.body-figure:has(.bf-on) .bf-m:not(.bf-on), .body-figure:has(.bf-on) .bf-fx { opacity: 0.4; }
 .bf-label { fill: var(--ink-muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
 .figure-legend .bf-key, .bf-legend .bf-key { width: 12px; height: 12px; border: 0; border-radius: 3px; }
 .bf-key.bf-none { background: transparent; border: 1px dashed var(--ink-muted); }
