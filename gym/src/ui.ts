@@ -29,12 +29,14 @@ export function message(error: unknown): string {
 }
 
 let toastTimer: number | undefined;
-export function toast(text: string, bad = false): void {
+/** A short message; with an action (Undo) it sits above the thumb and stays a little longer. */
+export function toast(text: string, bad = false, action?: { label: string; run: () => void }): void {
   const el = document.getElementById('toast') as HTMLElement;
-  el.textContent = text;
-  el.className = `show${bad ? ' bad' : ''}`;
+  const hide = () => (el.className = action ? 'act' : '');
+  el.replaceChildren(...[h('span', null, text), ...(action ? [h('button', { class: 'toast-act', onclick: () => (window.clearTimeout(toastTimer), hide(), action.run()) }, action.label)] : [])]);
+  el.className = `show${bad ? ' bad' : ''}${action ? ' act' : ''}`;
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (el.className = ''), bad ? 4000 : 2200);
+  toastTimer = window.setTimeout(hide, action ? 6000 : bad ? 4000 : 2200);
 }
 
 /** Runs a change and says what went wrong, if anything; true when it worked. */

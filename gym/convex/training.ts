@@ -6,6 +6,7 @@ import type { Doc } from './_generated/dataModel';
 import type { MutationCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { checkGymKey } from './access';
+import { set } from './schema';
 import { nextNum } from './lib/nums';
 import { activePlan, loadAll, planExerciseOf, planOfDay, sourceOf } from './lib/source';
 import { minutesOf, pickPrevious, summarize } from './lib/summary';
@@ -50,6 +51,8 @@ export const today = query({
     if (!view) throw new ConvexError('no such plan day');
     const workout = view.workoutId === null ? null : data.workouts.find((w) => w.num === view.workoutId) ?? null;
     const rest = new Map(data.exercises.map((e) => [e.num, e.restSeconds]));
+    // How hard each set felt (RPE), which the engine's view of a set doesn't carry.
+    const rpeOf = new Map((workout?.sets ?? []).map((s) => [s.num, s.rpe]));
     return {
       kind: 'day' as const,
       plan: { num: plan.num, name: plan.name },
@@ -84,7 +87,7 @@ export const today = query({
         lowestOk: state.suggestion.lowestOk,
         progress: state.progress,
         flags: state.flags,
-        logged,
+        logged: logged.map((s) => ({ ...s, rpe: rpeOf.get(s.id) ?? null })),
         now: now ? { kind: now.kind, message: now.message } : null,
       })),
     };
@@ -141,6 +144,49 @@ export const deleteSet = mutation({
     const sets = w.sets.filter((s) => s.num !== setNum).map((s) => (s.exercise === gone.exercise ? { ...s, setNo: ++n } : s));
     // A workout started here and emptied again was a mistake: it goes, so the day is free again.
     await ctx.db.patch(w._id, { sets, updatedAt: Date.now(), ...(!sets.length && w.origin === 'gym' ? { deleted: true } : {}) });
+    // The set as it was, so Undo can put it back.
+    return gone;
+  },
+});
+
+/** Undo of deleteSet: the set goes back where it was, and the sets after it move up again. */
+export const restoreSet = mutation({
+  args: { key: v.string(), workoutNum: v.number(), set },
+  handler: async (ctx, { key, workoutNum, set: back }) => {
+    checkGymKey(key);
+    // An emptied workout was marked deleted: Undo brings it back too.
+    const w = await ctx.db.query('workouts').withIndex('by_num', (q) => q.eq('num', workoutNum)).unique();
+    if (!w) throw new ConvexError('no such workout');
+    if (w.sets.some((s) => s.num === back.num)) return;
+    const sets = w.sets.map((s) => (s.exercise === back.exercise && s.setNo >= back.setNo ? { ...s, setNo: s.setNo + 1 } : s));
+    await ctx.db.patch(w._id, { sets: [...sets, back], deleted: false, updatedAt: Date.now() });
+  },
+});
+
+/** Fix a logged set: its weight, reps, or how hard it was (RPE; null clears it). */
+export const editSet = mutation({
+  args: { key: v.string(), workoutNum: v.number(), setNum: v.number(), weight: v.optional(v.number()), reps: v.optional(v.number()), rpe: v.optional(v.union(v.number(), v.null())) },
+  handler: async (ctx, { key, workoutNum, setNum, weight, reps, rpe }) => {
+    checkGymKey(key);
+    if (weight !== undefined && (!Number.isFinite(weight) || weight < -500 || weight > 1000)) throw new ConvexError('weight must be from 0 to 1000 kg');
+    if (reps !== undefined && (!Number.isInteger(reps) || reps < 0 || reps > 1000)) throw new ConvexError('reps must be a whole number');
+    if (rpe !== undefined && rpe !== null && (!Number.isFinite(rpe) || rpe < 1 || rpe > 10)) throw new ConvexError('RPE must be from 1 to 10');
+    const w = await workoutByNum(ctx, workoutNum);
+    const old = w.sets.find((s) => s.num === setNum);
+    if (!old) throw new ConvexError('no such set');
+    const sets = w.sets.map((s) =>
+      s.num !== setNum
+        ? s
+        : {
+            ...s,
+            // Bodyweight with nothing added stays "BW" (null), as logSet stores it.
+            ...(weight !== undefined ? { weight: weight === 0 && s.weight === null ? null : weight } : {}),
+            ...(reps !== undefined ? { reps } : {}),
+            ...(rpe !== undefined ? { rpe } : {}),
+          },
+    );
+    await ctx.db.patch(w._id, { sets, updatedAt: Date.now() });
+    return { weight: old.weight, reps: old.reps, rpe: old.rpe };
   },
 });
 

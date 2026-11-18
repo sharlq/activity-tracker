@@ -218,8 +218,41 @@ function stepper(label: string, value: number, step: number, min: number, onChan
   );
 }
 
+const weightField = (e: Exercise) => (e.bodyweight ? 'Added kg' : e.perHand ? 'kg per hand' : e.perSide ? 'kg per side' : 'kg');
+
+/** A small stroke icon (fixed markup, no data in it). */
+function icon(paths: string): HTMLElement {
+  const s = h('span', { class: 'icon', 'aria-hidden': 'true' });
+  s.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  return s;
+}
+const PENCIL = '<path d="M4 20h4L19 9l-4-4L4 16v4z"></path>';
+const MENU = '<path d="M4 7h16M4 12h16M4 17h16"></path>';
+
 const STATUS: Record<string, [string, string]> = { ahead: ['Ahead of goal', 'good'], 'on track': ['On track', 'accent'], behind: ['Behind goal', 'danger'] };
 const VERDICT: Record<string, [string, string]> = { ADD_WEIGHT: ['Add weight', 'good'], HOLD: ['Same weight', 'accent'], TOO_HEAVY: ['Too heavy', 'danger'] };
+
+/** How hard a set was, as reps left in the tank; stored as RPE so the PC reads it too. */
+const EFFORT = [
+  { label: 'Easy', sub: '3+ left', rpe: 7 },
+  { label: 'Solid', sub: '1–2 left', rpe: 8.5 },
+  { label: 'All out', sub: '0 left', rpe: 10 },
+] as const;
+const effortOf = (rpe: number | null) => (rpe === null ? null : rpe <= 7.5 ? EFFORT[0] : rpe < 9.5 ? EFFORT[1] : EFFORT[2]);
+
+function effortChips(current: number | null, pick: (rpe: number | null) => void): HTMLElement {
+  const on = effortOf(current);
+  return h(
+    'div',
+    { class: 'effort', role: 'group', 'aria-label': 'How hard it was' },
+    ...EFFORT.map((x) => h('button', { class: `btn effort-btn${on === x ? ' picked' : ''}`, 'aria-pressed': String(on === x), onclick: () => pick(on === x ? null : x.rpe) }, x.label, h('span', { class: 'effort-sub' }, x.sub))),
+  );
+}
+
+/** A logged set being fixed in the dock. */
+let editing: { exercise: number; workoutNum: number; setId: number; no: number; weight: number; reps: number; rpe: number | null } | null = null;
+/** The "finish with sets left?" sheet is up. */
+let confirming = false;
 
 async function logSet(e: Exercise, all: Exercise[]): Promise<void> {
   unlockSound();
@@ -242,18 +275,46 @@ async function logSet(e: Exercise, all: Exercise[]): Promise<void> {
   // Convex resolves a mutation once the subscribed queries show it, so the greyed set
   // gives way to the real one without a gap. Offline, it waits and sends on reconnect.
   try {
-    await client!.mutation(api.training.logSet, { key: key!, date, exerciseNum: e.num, weight, reps, at });
+    const res = await client!.mutation(api.training.logSet, { key: key!, date, exerciseNum: e.num, weight, reps, at });
     settle();
+    toast(`Set ${n} logged · ${wLabel(weight, e)} × ${reps}`, false, { label: 'Undo', run: () => void undoLog(e, res) });
   } catch (err) {
     settle();
     toast(message(err), true);
   }
 }
 
-async function deleteSet(workoutNum: number, setNum: number): Promise<void> {
+/** Undo of a set just logged: it goes, and so does the rest it started. */
+async function undoLog(e: Exercise, res: { workoutNum: number; setNum: number }): Promise<void> {
+  stopRest();
+  open = e.num;
+  if (await attempt(() => client!.mutation(api.training.deleteSet, { key: key!, workoutNum: res.workoutNum, setNum: res.setNum }), 'Set taken back')) render();
+}
+
+async function saveEdit(ed: NonNullable<typeof editing>): Promise<void> {
+  editing = null;
+  render();
   try {
-    await client!.mutation(api.training.deleteSet, { key: key!, workoutNum, setNum });
-    toast('Set removed');
+    const before = await client!.mutation(api.training.editSet, { key: key!, workoutNum: ed.workoutNum, setNum: ed.setId, weight: ed.weight, reps: ed.reps, rpe: ed.rpe });
+    toast(`Set ${ed.no} saved`, false, {
+      label: 'Undo',
+      run: () =>
+        void attempt(
+          () => client!.mutation(api.training.editSet, { key: key!, workoutNum: ed.workoutNum, setNum: ed.setId, weight: before.weight ?? 0, ...(before.reps !== null ? { reps: before.reps } : {}), rpe: before.rpe }),
+          'Change undone',
+        ),
+    });
+  } catch (err) {
+    toast(message(err), true);
+  }
+}
+
+async function removeSet(ed: NonNullable<typeof editing>): Promise<void> {
+  editing = null;
+  render();
+  try {
+    const gone = await client!.mutation(api.training.deleteSet, { key: key!, workoutNum: ed.workoutNum, setNum: ed.setId });
+    toast(`Set ${ed.no} removed`, false, { label: 'Undo', run: () => void attempt(() => client!.mutation(api.training.restoreSet, { key: key!, workoutNum: ed.workoutNum, set: gone }), 'Set put back') });
   } catch (err) {
     toast(message(err), true);
   }
@@ -318,7 +379,20 @@ function sinceLastSet(t: { exercises: Exercise[]; workout: { end: number | null 
     if (!value.isConnected) return window.clearInterval(sinceTick);
     value.textContent = mmss(Math.max(0, Math.round((Date.now() - last) / 1000)));
   }, 1000);
-  return h('p', { class: 'since', role: 'timer', 'aria-label': 'Time since your last set' }, h('span', { class: 'muted' }, 'Since last set '), value);
+  return h('span', { class: 'since', role: 'timer', 'aria-label': 'Time since your last set' }, 'Since last set ', value);
+}
+
+/** Reps against the same set last time, at the same weight. */
+function compared(reps: number | null, target: number | undefined): HTMLElement | null {
+  if (reps === null || target === undefined) return null;
+  const d = reps - target;
+  return h('span', { class: `set-cmp${d > 0 ? ' good' : d < 0 ? ' warn' : ''}` }, d > 0 ? `+${d} on last time` : d < 0 ? `−${-d} on last time` : 'same as last time');
+}
+
+/** Pieces joined with " · ". */
+function dotted(...parts: (HTMLElement | string | null)[]): HTMLElement | null {
+  const kept = parts.filter((p): p is HTMLElement | string => p !== null);
+  return kept.length ? h('span', { class: 'set-sub' }, ...kept.flatMap((p, i) => (i ? [' · ', p] : [p]))) : null;
 }
 
 function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): HTMLElement {
@@ -327,63 +401,144 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
   const isOpen = open === e.num;
   const head = h(
     'button',
-    { class: 'ex-head', onclick: () => ((open = isOpen ? null : e.num), render()), 'aria-expanded': String(isOpen) },
+    { class: 'ex-head', onclick: () => ((open = isOpen ? null : e.num), (editing = null), render()), 'aria-expanded': String(isOpen) },
     h('span', { class: `ex-dot${complete ? ' done' : count ? ' some' : ''}`, 'aria-hidden': 'true' }, complete ? '✓' : ''),
     h('span', { class: 'ex-name', dir: 'auto' }, e.name),
     h('span', { class: 'ex-meta' }, `${count}/${e.sets}`, h('span', { class: 'ex-weight' }, wLabel(e.suggested, e))),
   );
-  if (!isOpen) return h('section', { class: `ex${complete ? ' complete' : ''}` }, head);
+  if (!isOpen) return h('section', { class: `ex${complete ? ' complete' : ''}`, id: `ex-${e.num}` }, head);
 
   const { weight, reps } = defaults(e);
-  const set = (patch: Partial<{ weight: number; reps: number }>) => inputs.set(e.num, { ...defaults(e), ...patch });
   const progress = e.progress ? STATUS[e.progress.status] : null;
   const gaps = gapsOf(all);
-  const rows = [
-    ...e.logged.map((s, i) =>
-      h(
+  // "Last time" reps only mean something at the weight they were done at.
+  const atAim = (w: number | null) => (w ?? 0) === e.suggested;
+  const lastAt = lastLoggedAt(all);
+  const rows: HTMLElement[] = [
+    ...e.logged.map((s, i) => {
+      const w = s.weight ?? (e.bodyweight ? 0 : null);
+      const gap = gaps.get(s.id);
+      const isEditing = editing?.setId === s.id;
+      return h(
         'li',
-        { class: 'set' },
-        h('span', { class: 'set-no' }, `Set ${i + 1}`),
-        h('span', { class: 'set-what' }, `${wLabel(s.weight ?? (e.bodyweight ? 0 : null), e)} × ${s.reps ?? '—'}`),
-        gaps.has(s.id) ? h('span', { class: 'set-gap muted small', title: 'Time since the set before it was logged' }, `⏱ ${mmss(gaps.get(s.id)!)}`) : null,
-        workoutNum !== null ? h('button', { class: 'btn ghost small', onclick: () => void deleteSet(workoutNum, s.id), 'aria-label': `Remove set ${i + 1}` }, '✕') : null,
-      ),
-    ),
+        null,
+        h(
+          'button',
+          {
+            class: `set logged${isEditing ? ' editing' : ''}`,
+            'aria-label': `Edit set ${i + 1}: ${wLabel(w, e)} × ${s.reps ?? '—'}`,
+            onclick: () => {
+              if (workoutNum === null) return;
+              editing = { exercise: e.num, workoutNum, setId: s.id, no: i + 1, weight: w ?? 0, reps: s.reps ?? 0, rpe: s.rpe };
+              render();
+            },
+          },
+          h('span', { class: 'set-no' }, `Set ${i + 1}`),
+          h('span', { class: 'set-what' }, `${wLabel(w, e)} × ${s.reps ?? '—'}`, dotted(compared(s.reps, e.beat && atAim(w) ? e.beat[i] : undefined), gap !== undefined ? `rested ${mmss(gap)}` : null, effortOf(s.rpe)?.label ?? null)),
+          icon(PENCIL),
+        ),
+      );
+    }),
     ...pending
       .filter((p) => p.exercise === e.num)
       .map((p, i) => h('li', { class: 'set saving' }, h('span', { class: 'set-no' }, `Set ${e.logged.length + i + 1}`), h('span', { class: 'set-what' }, `${wLabel(p.weight, e)} × ${p.reps}`), h('span', { class: 'muted small' }, online ? 'saving…' : 'waiting for signal'))),
   ];
+  if (!complete && !editing) {
+    const target = e.beat && atAim(weight) ? e.beat[count] : undefined;
+    rows.push(
+      h(
+        'li',
+        { class: 'set current' },
+        h('span', { class: 'set-no' }, `Set ${count + 1}`),
+        h('span', { class: 'set-what' }, h('span', { id: 'cur-what' }, `${wLabel(weight, e)} × ${reps}`), dotted(target !== undefined ? `last time ${target}` : `${e.repMin}–${e.repMax} reps`)),
+        h('button', { class: 'btn primary', onclick: () => void logSet(e, all), 'aria-label': `Log set ${count + 1}` }, 'Log'),
+      ),
+    );
+  }
+  for (let k = complete ? e.sets : count + 1; k < e.sets; k++) {
+    const target = e.beat && atAim(weight) ? e.beat[k] : undefined;
+    rows.push(h('li', { class: 'set future' }, h('span', { class: 'set-no' }, `Set ${k + 1}`), h('span', { class: 'set-what' }, wLabel(weight, e), dotted(target !== undefined ? `last time ${target}` : `${e.repMin}–${e.repMax} reps`))));
+  }
+
+  // One tap for how the set just logged felt; it goes once answered, or once another set is in.
+  const latest = e.logged.at(-1);
+  const askEffort = workoutNum !== null && !editing && latest !== undefined && latest.rpe === null && latest.at !== null && latest.at === lastAt && Date.now() - latest.at < 20 * 60_000;
   return h(
     'section',
-    { class: `ex open${complete ? ' complete' : ''}` },
+    { class: `ex open${complete ? ' complete' : ''}`, id: `ex-${e.num}` },
     head,
     h(
       'div',
       { class: 'ex-body' },
+      h('div', { class: 'ex-plan' }, h('span', null, `${e.sets} × ${e.repMin}–${e.repMax}`), progress ? h('span', { class: `badge ${progress[1]}` }, progress[0]) : null, restPicker(e)),
+      e.last
+        ? h('p', { class: 'muted small' }, `Last ${shortDay(e.last.day)}: ${wLabel(e.last.weight, e)} × ${e.last.reps.join('/')}`, e.lastVerdict ? `. ${e.lastVerdict}` : '')
+        : h('p', { class: 'muted small' }, 'First time on the plan'),
+      e.setsReason ? h('p', { class: 'small' }, h('span', { class: 'badge accent' }, `${e.sets} sets`), ` ${e.setsReason}`) : null,
+      ...e.flags.map((f) => h('p', { class: 'note' }, f.message)),
       e.note ? h('p', { class: 'muted small', dir: 'auto' }, e.note) : null,
-      h(
-        'div',
-        { class: 'aim' },
-        h('div', null, h('span', { class: 'aim-label' }, 'Aim'), h('strong', null, wLabel(e.suggested, e)), h('span', { class: 'muted' }, ` · ${e.sets} × ${e.repMin}–${e.repMax}`)),
-        e.setsReason ? h('div', { class: 'small' }, h('span', { class: 'badge accent' }, `${e.sets} sets`), ` ${e.setsReason}`) : null,
-        e.beat ? h('div', null, h('span', { class: 'aim-label' }, 'Beat'), h('strong', null, e.beat.join(' · '))) : null,
-        e.last
-          ? h('div', { class: 'muted small' }, `Last ${shortDay(e.last.day)}: ${wLabel(e.last.weight, e)} × ${e.last.reps.join('/')}`, e.lastVerdict ? ` → ${e.lastVerdict}` : '')
-          : h('div', { class: 'muted small' }, 'First time on the plan'),
-        h('div', { class: 'badges' }, progress ? h('span', { class: `badge ${progress[1]}` }, progress[0]) : null, ...e.flags.map((f) => h('span', { class: 'badge warn', title: f.message }, f.kind)), restPicker(e)),
-      ),
-      rows.length ? h('ol', { class: 'sets' }, rows) : null,
+      h('ol', { class: 'sets' }, rows),
+      askEffort
+        ? h(
+            'div',
+            { class: 'effort-ask' },
+            h('p', { class: 'small' }, h('strong', null, `How hard was set ${e.logged.length}?`), h('span', { class: 'muted' }, ' Optional')),
+            effortChips(null, (rpe) => void attempt(() => client!.mutation(api.training.editSet, { key: key!, workoutNum, setNum: latest.id, rpe }), rpe === null ? undefined : `Set ${e.logged.length}: ${effortOf(rpe)!.label}`)),
+          )
+        : null,
       // The engine's call needs the whole session: shown once the planned sets are in.
       e.now && e.logged.length >= e.sets ? h('p', { class: `now ${VERDICT[e.now.kind]?.[1] ?? ''}` }, e.now.message) : null,
-      h(
-        'div',
-        { class: 'inputs' },
-        stepper(e.bodyweight ? 'Added kg' : e.perHand ? 'kg per hand' : e.perSide ? 'kg per side' : 'kg', weight, e.step, e.bodyweight ? -200 : 0, (v) => set({ weight: v }), true),
-        stepper('Reps', reps, 1, 0, (v) => set({ reps: v }), false),
-      ),
-      h('button', { class: 'btn primary big', onclick: () => void logSet(e, all) }, complete ? `Log extra set (${count + 1})` : `Log set ${count + 1} of ${e.sets}`),
       plannedSets(e),
     ),
+  );
+}
+
+const logText = (e: Exercise) => {
+  const c = done(e);
+  const { weight, reps } = defaults(e);
+  return `${c >= e.sets ? 'Log extra set' : `Log set ${c + 1}`} · ${wLabel(weight, e)} × ${reps}`;
+};
+
+/** The stepper changed: the dock's button and the highlighted row say the new numbers. */
+function updateLive(e: Exercise): void {
+  const { weight, reps } = defaults(e);
+  const b = document.getElementById('log-btn');
+  if (b) b.textContent = logText(e);
+  const c = document.getElementById('cur-what');
+  if (c) c.textContent = `${wLabel(weight, e)} × ${reps}`;
+}
+
+/** Pinned to the bottom, under the thumb: the next set's weight and reps and its Log button, or the set being fixed. */
+function dock(t: Today, e: Exercise): HTMLElement {
+  if (editing && editing.exercise === e.num) {
+    const ed = editing;
+    return h(
+      'div',
+      { class: 'dock', id: 'dock' },
+      h('div', { class: 'dock-head' }, h('span', { dir: 'auto' }, `Editing set ${ed.no} · ${e.name}`)),
+      h('div', { class: 'inputs' }, stepper(weightField(e), ed.weight, e.step, e.bodyweight ? -200 : 0, (v) => (ed.weight = v), true), stepper('Reps', ed.reps, 1, 0, (v) => (ed.reps = v), false)),
+      effortChips(ed.rpe, (rpe) => ((ed.rpe = rpe), render())),
+      h(
+        'div',
+        { class: 'dock-actions' },
+        h('button', { class: 'btn danger-ghost', onclick: () => void removeSet(ed) }, 'Remove'),
+        h('button', { class: 'btn', onclick: () => ((editing = null), render()) }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => void saveEdit(ed) }, 'Save'),
+      ),
+    );
+  }
+  const count = done(e);
+  const { weight, reps } = defaults(e);
+  const set = (patch: Partial<{ weight: number; reps: number }>) => {
+    inputs.set(e.num, { ...defaults(e), ...patch });
+    updateLive(e);
+  };
+  return h(
+    'div',
+    { class: 'dock', id: 'dock' },
+    h('div', { class: 'dock-head' }, h('span', { dir: 'auto' }, `${count >= e.sets ? `Extra set ${count + 1}` : `Set ${count + 1} of ${e.sets}`} · ${e.name}`), sinceLastSet(t)),
+    h('div', { class: 'inputs' }, stepper(weightField(e), weight, e.step, e.bodyweight ? -200 : 0, (v) => set({ weight: v }), true), stepper('Reps', reps, 1, 0, (v) => set({ reps: v }), false)),
+    h('button', { class: 'btn primary big', id: 'log-btn', onclick: () => void logSet(e, t.exercises) }, logText(e)),
   );
 }
 
@@ -399,6 +554,54 @@ async function finish(t: Today): Promise<void> {
   }
 }
 
+const unfinished = (t: Today) => t.exercises.filter((e) => done(e) < e.sets);
+
+/** Before finishing with sets left: what's not done, and what that means for next time. */
+function finishSheet(t: Today): HTMLElement {
+  const left = unfinished(t);
+  const partial = left.filter((e) => done(e) > 0);
+  const first = (partial[0] ?? left[0]) as Exercise;
+  const total = t.exercises.reduce((n, e) => n + e.sets, 0);
+  const logged = t.exercises.reduce((n, e) => n + Math.min(done(e), e.sets), 0);
+  const minutes = t.workout?.start ? Math.round((Date.now() - t.workout.start) / 60_000) : null;
+  const close = () => ((confirming = false), render());
+  const why = [
+    partial.length ? `A half-done lift counts as a short session, so it usually holds the weight next time.` : null,
+    left.length > partial.length ? `Lifts you didn't start keep their aim.` : null,
+  ].filter(Boolean);
+  return h(
+    'div',
+    { class: 'sheet-wrap', onclick: (ev: MouseEvent) => ev.target === ev.currentTarget && close() },
+    h(
+      'section',
+      { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'finish-title' },
+      h('h2', { id: 'finish-title', dir: 'auto' }, `Finish ${t.day.name}?`),
+      h('p', { class: 'muted' }, `${logged} of ${total} planned sets done${minutes !== null ? ` · ${minutes} min` : ''}`),
+      h(
+        'ul',
+        { class: 'left-list' },
+        ...left.map((e) => h('li', { class: done(e) ? 'part' : '' }, h('span', { dir: 'auto' }, e.name), h('span', { class: 'small' }, done(e) ? `${done(e)} of ${e.sets} sets` : `not started · ${e.sets} sets`))),
+      ),
+      h('p', { class: 'muted small' }, why.join(' ')),
+      h(
+        'button',
+        {
+          class: 'btn primary big',
+          onclick: () => {
+            confirming = false;
+            editing = null;
+            open = first.num;
+            render();
+            document.getElementById(`ex-${first.num}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          },
+        },
+        `Keep training: ${first.name}`,
+      ),
+      h('button', { class: 'btn big', onclick: () => ((confirming = false), void finish(t)) }, 'Finish anyway'),
+    ),
+  );
+}
+
 function todayScreen(): HTMLElement[] {
   if (today === undefined) return [h('p', { class: 'muted pad' }, 'Loading today’s plan…')];
   if (today.kind === 'no plan') {
@@ -409,6 +612,9 @@ function todayScreen(): HTMLElement[] {
   }
   const t = today;
   if (open === null || !t.exercises.some((e) => e.num === open)) open = (t.exercises.find((e) => done(e) < e.sets) ?? t.exercises[0])?.num ?? null;
+  // A set being fixed that's gone (removed on the PC, say) closes the editor.
+  if (editing && !t.exercises.some((e) => e.logged.some((s) => s.id === editing!.setId))) editing = null;
+  const current = t.exercises.find((e) => e.num === open);
   const total = t.exercises.reduce((n, e) => n + e.sets, 0);
   const logged = t.exercises.reduce((n, e) => n + Math.min(done(e), e.sets), 0);
   const awake = canKeepAwake()
@@ -417,9 +623,11 @@ function todayScreen(): HTMLElement[] {
   const switchDay = (num: number) => () => {
     dayNum = num;
     open = null;
+    editing = null;
     inputs.clear();
     start();
   };
+  const workout = t.workout;
   return [
     h(
       'header',
@@ -427,28 +635,45 @@ function todayScreen(): HTMLElement[] {
       h(
         'div',
         { class: 'top-row' },
-        h('div', null, h('p', { class: 'eyebrow' }, `${shortDay(t.date)} · `, h('a', { href: `#/plans/${t.plan.num}`, class: 'plan-link' }, t.plan.name)), h('h1', null, t.day.name)),
-        h('div', { class: 'row tight' }, h('a', { class: 'btn ghost small', href: '#/strength' }, 'Strength'), h('a', { class: 'btn ghost small', href: '#/plans' }, 'Plans'), h('a', { class: 'btn ghost small', href: '#/history' }, 'Past')),
+        h('div', { class: 'grow' }, h('p', { class: 'eyebrow' }, `${shortDay(t.date)} · `, h('a', { href: `#/plans/${t.plan.num}`, class: 'plan-link' }, t.plan.name)), h('h1', null, t.day.name)),
+        h(
+          'details',
+          { class: 'menu' },
+          h('summary', { class: 'btn ghost menu-btn', 'aria-label': 'Menu' }, icon(MENU)),
+          h('nav', { class: 'menu-list' }, h('a', { href: '#/strength' }, 'Strength score'), h('a', { href: '#/plans' }, 'Plans'), h('a', { href: '#/history' }, 'Past workouts')),
+        ),
       ),
       h(
         'div',
         { class: 'chips', role: 'tablist', 'aria-label': 'Plan day' },
-        ...t.days.map((d) => h('button', { class: `chip${d.id === t.day.id ? ' on' : ''}`, role: 'tab', 'aria-selected': String(d.id === t.day.id), onclick: switchDay(d.id) }, d.name, d.id === t.next && d.id !== t.started ? h('span', { class: 'chip-dot', title: 'Next in the rotation' }, '•') : null)),
+        ...t.days.map((d) =>
+          h(
+            'button',
+            { class: `chip${d.id === t.day.id ? ' on' : ''}`, role: 'tab', 'aria-selected': String(d.id === t.day.id), onclick: switchDay(d.id) },
+            d.name,
+            d.id === t.next && d.id !== t.started ? h('span', { class: 'chip-dot' }, h('span', { 'aria-hidden': 'true' }, '•'), h('span', { class: 'sr-only' }, ' (next in the rotation)')) : null,
+          ),
+        ),
       ),
       h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': total, 'aria-valuenow': logged }, h('span', { style: `width:${total ? (logged / total) * 100 : 0}%` })),
       h('div', { class: 'top-row small' }, h('span', { class: 'muted' }, `${logged} of ${total} sets`), awake),
-      sinceLastSet(t),
       t.started !== null && t.started !== t.day.id ? h('p', { class: 'note' }, 'You already started another plan day today. Sets here go into a separate workout.') : null,
       t.day.note ? h('p', { class: 'muted small', dir: 'auto' }, t.day.note) : null,
     ),
-    h('main', { class: 'list' }, ...t.exercises.map((e) => exerciseCard(e, t.exercises, t.workout?.num ?? null))),
+    h('main', { class: 'list' }, ...t.exercises.map((e) => exerciseCard(e, t.exercises, workout?.num ?? null))),
     h(
       'footer',
       { class: 'finish' },
-      t.workout
-        ? h('button', { class: 'btn primary big', onclick: () => void finish(t) }, t.workout.end ? 'See summary' : 'Finish workout')
+      workout
+        ? h(
+            'button',
+            { class: 'btn big', onclick: () => (!workout.end && unfinished(t).length ? ((confirming = true), render()) : void finish(t)) },
+            workout.end ? 'See summary' : 'Finish workout',
+          )
         : h('p', { class: 'muted small center' }, 'The workout starts with your first set.'),
     ),
+    ...(current ? [dock(t, current)] : []),
+    ...(confirming && workout ? [finishSheet(t)] : []),
   ];
 }
 
@@ -547,9 +772,12 @@ const bar = document.getElementById('timer') as HTMLElement;
 function renderTimer(): void {
   const r = restNow();
   bar.hidden = !r;
+  document.body.classList.toggle('resting', !!r);
   if (!r) return;
   const left = remaining();
   const over = left === 0;
+  // Past the end it counts on, so the clock since the last set needs no second display.
+  const late = over ? Math.max(0, Math.floor((Date.now() - r.endsAt) / 1000)) : 0;
   bar.className = over ? 'over' : '';
   bar.replaceChildren(
     h('div', { class: 'timer-fill', style: `width:${over ? 100 : ((r.total - left) / r.total) * 100}%` }),
@@ -557,9 +785,9 @@ function renderTimer(): void {
       'div',
       { class: 'timer-row' },
       h('button', { class: 'btn timer-btn', onclick: () => addRest(-30), 'aria-label': '30 seconds less' }, '−30'),
-      h('div', { class: 'timer-mid', role: 'timer', 'aria-live': over ? 'assertive' : 'off' }, h('strong', { class: 'timer-time' }, over ? 'Go' : mmss(left)), h('span', { class: 'timer-label' }, over ? `Rest over · ${r.label}` : r.label)),
+      h('div', { class: 'timer-mid', role: 'timer', 'aria-live': over ? 'assertive' : 'off' }, h('strong', { class: 'timer-time' }, over ? `+${mmss(late)}` : mmss(left)), h('span', { class: 'timer-label' }, over ? `Rest over · ${r.label}` : r.label)),
       h('button', { class: 'btn timer-btn', onclick: () => addRest(30), 'aria-label': '30 seconds more' }, '+30'),
-      h('button', { class: 'btn timer-btn', onclick: () => stopRest(), 'aria-label': over ? 'Dismiss' : 'Skip rest' }, over ? '✓' : 'Skip'),
+      h('button', { class: 'btn timer-btn', onclick: () => stopRest(), 'aria-label': over ? 'Dismiss the timer' : 'Skip rest' }, over ? 'Done' : 'Skip'),
     ),
   );
 }
@@ -573,6 +801,25 @@ window.addEventListener('hashchange', () => {
   start();
 });
 document.addEventListener('pointerdown', unlockSound, { once: true });
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && confirming) {
+    confirming = false;
+    render();
+  }
+});
+// The dock's height: the timer sits on it, and the page leaves room for both.
+const dockSize = new ResizeObserver(() => syncDock());
+function syncDock(): void {
+  const d = document.getElementById('dock');
+  document.body.classList.toggle('has-dock', !!d);
+  document.body.style.setProperty('--dock-h', `${d?.offsetHeight ?? 0}px`);
+}
+new MutationObserver(() => {
+  dockSize.disconnect();
+  const d = document.getElementById('dock');
+  if (d) dockSize.observe(d);
+  syncDock();
+}).observe(app, { childList: true });
 // Past midnight with the app open: today moves on.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && localDay() !== date) {

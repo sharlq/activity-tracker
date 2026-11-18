@@ -4,7 +4,7 @@
 import { ConvexError, v } from 'convex/values';
 import { query } from './_generated/server';
 import { checkGymKey } from './access';
-import { strengthBalance, strengthScores, strengthTrend } from '../../tracker/src/strength.ts';
+import { strengthBalance, strengthFocus, strengthGains, strengthScores, strengthTrend } from '../../tracker/src/strength.ts';
 
 export const scores = query({
   args: {
@@ -26,14 +26,18 @@ export const scores = query({
     const weights = weighIns.map((w) => ({ day: w.day, weight: w.weight }));
     const fallback = bodyweight ?? null;
     const now = strengthScores(sets, weights, date, standards, fallback);
+    const balance = strengthBalance(now);
+    const trend = strengthTrend(sets, weights, date, standards, fallback);
     return {
       standards,
       bodyweight: now.bodyweight,
       /** True when the weight came from the phone, not a weigh-in. */
       bodyweightGiven: !weights.length && now.bodyweight !== null,
       scores: now,
-      balance: strengthBalance(now),
-      trend: strengthTrend(sets, weights, date, standards, fallback),
+      balance,
+      focus: strengthFocus(now, balance),
+      trend,
+      gains: strengthGains(trend),
     };
   },
 });

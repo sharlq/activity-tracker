@@ -754,3 +754,79 @@ pre.code { background: var(--panel-2); border: 1px solid var(--line); border-rad
   .plan-ex > header { flex-direction: column; }
   .plan-ex .suggest { text-align: left; }
 }
+
+/* Body figure (bodyFigure.ts): a grey body, unscored muscles pale, scored ones one hue, lighter to darker as the level rises. */
+:root { --bf-body: #cfcac0; --bf-shade: #b9b3a7; --bf-core: #f7f5f0; --bf-edge: #5f584e; --bf-fibre: rgba(70, 60, 50, 0.3); --bf-l0: #d6ebe6; --bf-l1: #b8ded7; --bf-l2: #8fcbc1; --bf-l3: #4fa99c; --bf-l4: #1b8478; --bf-l5: #0b5c55; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { --bf-body: #313b39; --bf-shade: #283130; --bf-core: #4a5653; --bf-edge: #0c1110; --bf-fibre: rgba(0, 0, 0, 0.32); --bf-l0: #2c4844; --bf-l1: #1f5e56; --bf-l2: #1e7a70; --bf-l3: #22998b; --bf-l4: #3cc7b6; --bf-l5: #9af0e4; }
+}
+.body-figure { display: block; width: 100%; max-width: 420px; height: auto; margin: 0 auto; }
+.bf-body { fill: var(--bf-body); stroke: var(--bf-edge); stroke-width: 2.4; stroke-linejoin: round; }
+.bf-skin { fill: var(--bf-body); }
+.bf-body ellipse, .bf-head { stroke-width: 1.2; }
+.bf-line { fill: none; stroke: var(--bf-edge); stroke-width: 0.7; stroke-linecap: round; }
+.bf-shade { fill: var(--bf-shade); }
+.bf-core { fill: var(--bf-core); stroke: var(--bf-edge); stroke-width: 0.7; }
+.bf-fx { pointer-events: none; }
+.bf-fib { stroke: var(--bf-fibre); stroke-width: 0.45; }
+.bf-m { stroke: var(--bf-edge); stroke-width: 0.8; cursor: pointer; transition: opacity 0.15s; }
+.bf-none { fill: var(--bf-core); stroke-dasharray: 2.5 1.5; }
+.bf-l0 { fill: var(--bf-l0); } .bf-l1 { fill: var(--bf-l1); } .bf-l2 { fill: var(--bf-l2); }
+.bf-l3 { fill: var(--bf-l3); } .bf-l4 { fill: var(--bf-l4); } .bf-l5 { fill: var(--bf-l5); }
+.bf-m.bf-on { stroke: var(--ink); stroke-width: 2.5; }
+.bf-label { fill: var(--ink-muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.figure-legend .bf-key, .bf-legend .bf-key { width: 12px; height: 12px; border: 0; border-radius: 3px; }
+.bf-key.bf-none { background: transparent; border: 1px dashed var(--ink-muted); }
+.bf-key.bf-l0 { background: var(--bf-l0); } .bf-key.bf-l1 { background: var(--bf-l1); } .bf-key.bf-l2 { background: var(--bf-l2); }
+.bf-key.bf-l3 { background: var(--bf-l3); } .bf-key.bf-l4 { background: var(--bf-l4); } .bf-key.bf-l5 { background: var(--bf-l5); }
+.figure-readout { text-align: center; min-height: 1.4em; margin: 6px 0 0; }
+.bal { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.bal p { margin: 0; }
+.bal-names { display: flex; justify-content: space-between; gap: 8px; }
+.bal-track { position: relative; height: 8px; background: var(--panel-2); border-radius: 4px; }
+.bal-mid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink-muted); }
+.bal-fill { position: absolute; top: 0; bottom: 0; background: var(--dawn); border-radius: 4px; }
+.bal-fill.ok { background: var(--accent); }
+.strength-row.on td { background: var(--accent-soft); }
+.strength-table .badge { white-space: nowrap; }
+
+/* Strength: focus list, confidence, the lifts that count toward nothing. */
+.focus-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.focus-item { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); }
+.focus-item.lapsed, .focus-item.expiring { background: var(--dawn-soft); }
+.focus-item.lapsed b, .focus-item.expiring b { color: var(--dawn-ink); }
+.conf { display: inline-flex; align-items: center; gap: 6px; }
+.conf-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--ink-muted); }
+.conf-dot.high { background: var(--accent); }
+.conf-dot.medium { background: var(--dawn); }
+.conf-dot.low { background: var(--danger); }
+.warn-ink { color: var(--dawn-ink); }
+.bal-rest { margin-top: 4px; }
+.uncounted { margin-top: 10px; }
+.uncounted summary { cursor: pointer; }
+.uncounted p { margin: 6px 0 0; }
+
+/* Body figure against your average (bodyFigure.ts' relative mode), and the score on each muscle. */
+:root { --bf-r-far: #c98a2b; --bf-r-behind: #f1cf94; --bf-r-near: #b8ded7; --bf-r-ahead: #1b8478; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { --bf-r-far: #f0b85a; --bf-r-behind: #8a6a2f; --bf-r-near: #1f5e56; --bf-r-ahead: #3cc7b6; }
+}
+:root[data-theme='dark'] { --bf-r-far: #f0b85a; --bf-r-behind: #8a6a2f; --bf-r-near: #1f5e56; --bf-r-ahead: #3cc7b6; }
+.bf-r-far { fill: var(--bf-r-far); } .bf-r-behind { fill: var(--bf-r-behind); }
+.bf-r-near { fill: var(--bf-r-near); } .bf-r-ahead { fill: var(--bf-r-ahead); }
+.bf-key.bf-r-far { background: var(--bf-r-far); } .bf-key.bf-r-behind { background: var(--bf-r-behind); }
+.bf-key.bf-r-near { background: var(--bf-r-near); } .bf-key.bf-r-ahead { background: var(--bf-r-ahead); }
+.bf-num { font-size: 15px; font-weight: 700; fill: var(--ink); stroke: var(--panel); stroke-width: 4px; paint-order: stroke; stroke-linejoin: round; cursor: pointer; font-variant-numeric: tabular-nums; }
+.bf-num:focus { outline: none; }
+.bf-num:focus-visible, .bf-num.bf-on { fill: var(--accent-ink); stroke: var(--accent-soft); stroke-width: 6px; }
+.figure-mode { justify-content: flex-end; margin-bottom: 8px; }
+
+/* Progress inside a level, score sparklines, biggest gains. */
+.lvl-prog { position: relative; height: 5px; margin-top: 6px; width: 120px; max-width: 100%; background: var(--track, var(--panel-2)); border-radius: 3px; overflow: hidden; }
+.lvl-prog.wide { width: auto; flex: 1; margin: 0; height: 8px; }
+.lvl-prog span { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 3px; }
+.overall-prog { display: flex; align-items: center; gap: 12px; margin: -4px 0 16px; }
+.score-cell { display: flex; align-items: center; gap: 10px; }
+.spark { display: block; flex-shrink: 0; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.gains { margin: 8px 0 0; }
