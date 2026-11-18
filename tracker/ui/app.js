@@ -2315,6 +2315,7 @@ async function settingsPage() {
         ),
         h('div', { class: 'row', style: { marginTop: '12px' } }, h('a', { class: 'btn', href: '#morning' }, 'Show it now')),
       ),
+      strengthStandardsCard(),
       card(
         'Evening log',
         null,
@@ -3747,7 +3748,7 @@ function exerciseViewTabs() {
   return h(
     'div',
     { class: 'seg', role: 'tablist', 'aria-label': 'Exercise view', style: { marginBottom: '16px' } },
-    [['today', "Today's workout"], ['plan', 'Plan'], ['progress', 'Progress'], ['log', 'Log']].map(([t, name]) =>
+    [['today', "Today's workout"], ['plan', 'Plan'], ['progress', 'Progress'], ['strength', 'Strength'], ['log', 'Log']].map(([t, name]) =>
       h('button', {
         type: 'button',
         role: 'tab',
@@ -4058,6 +4059,214 @@ async function trainingProgress(key) {
   ];
 }
 
+// ---- strength score and balance (strength.ts), with the body figure (bodyFigure.ts)
+
+const FIGURE_LEGEND = {
+  level: [['bf-none', 'No recent lifts'], ['bf-l0', 'Below beginner'], ['bf-l1', 'Beginner'], ['bf-l2', 'Novice'], ['bf-l3', 'Intermediate'], ['bf-l4', 'Advanced'], ['bf-l5', 'Elite']],
+  relative: [['bf-none', 'No recent lifts'], ['bf-r-far', 'Far behind your average'], ['bf-r-behind', 'Behind'], ['bf-r-near', 'Near your average'], ['bf-r-ahead', 'Ahead']],
+};
+const stored = (key, values, fallback) => {
+  try {
+    const v = localStorage.getItem(key);
+    return values.includes(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+};
+const remember = (key, v) => {
+  try {
+    localStorage.setItem(key, v);
+  } catch {}
+};
+// Set in Settings; kept on this PC.
+let strengthStandards = stored('raqib.strengthStandards', ['men', 'women'], 'men');
+// How the figure shades the muscles: against your own average, or by level.
+let figureMode = stored('raqib.figureMode', ['relative', 'level'], 'relative');
+
+/** The Settings card for the strength standards. */
+function strengthStandardsCard() {
+  return card('Strength score', null,
+    h('p', { class: 'hint', style: { marginBottom: '12px' } }, 'Which bodyweight standards the strength score uses. Approximate ratios for each group’s reference lift.'),
+    h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Standards' },
+      [['men', "Men's standards"], ['women', "Women's standards"]].map(([v, name]) =>
+        h('button', { type: 'button', role: 'radio', class: v === strengthStandards ? 'on' : '', 'aria-checked': String(v === strengthStandards), onclick: () => {
+          strengthStandards = v;
+          remember('raqib.strengthStandards', v);
+          say('Saved');
+          render();
+        } }, name))));
+}
+
+const levelText = (g) => g.level ?? (g.score === null ? 'No recent lifts' : 'Below beginner');
+const CONFIDENCE = { high: 'High', medium: 'Medium', low: 'Low' };
+/** How sure a group's score is, and why: its best lift is the reference lift or a conversion. */
+const confidenceCell = (g) => g.confidence
+  ? [h('div', { class: 'conf' }, h('i', { class: `conf-dot ${g.confidence}`, 'aria-hidden': 'true' }), CONFIDENCE[g.confidence]),
+    h('div', { class: 'hint' }, g.confidence === 'high' ? 'scored on the lift itself' : `${g.best.exercise}, converted`)]
+  : '—';
+/** Points into the current level, 0–99; null at Elite or without a score. */
+const intoLevel = (score) => (score === null || score >= 500 ? null : score % 100);
+
+function focusCard(items) {
+  return card('Focus next', 'What would change these numbers most',
+    h('ul', { class: 'focus-list' }, items.map((f) => h('li', { class: `focus-item ${f.kind}` }, h('b', {}, f.title), h('span', { class: 'hint' }, f.detail)))));
+}
+const liftText = (l) => `${l.weight === null ? 'BW' : `${n1(l.weight)} kg`} × ${l.reps}`;
+
+/** A group's score over the trend, as a small line; scaled to at least 40 points so a flat line looks flat. */
+function scoreSparkline(values, label) {
+  const pts = values.map((v, i) => [i, v]).filter(([, v]) => v !== null && v !== undefined);
+  if (pts.length < 2) return null;
+  const W = 72, H = 22, n = values.length - 1;
+  const vs = pts.map(([, v]) => v);
+  let lo = Math.min(...vs), hi = Math.max(...vs);
+  if (hi - lo < 40) {
+    const mid = (hi + lo) / 2;
+    lo = mid - 20;
+    hi = mid + 20;
+  }
+  const x = (i) => 1 + (i / n) * (W - 2);
+  const y = (v) => H - 2 - ((v - lo) / (hi - lo)) * (H - 4);
+  return svg('svg', { class: 'spark', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': label },
+    svg('polyline', { points: pts.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ') }));
+}
+
+/** Points into the level, as a bar, with what's left to the next one. */
+function levelProgress(score, next) {
+  const into = intoLevel(score);
+  if (into === null) return null;
+  return h('div', { class: 'lvl-prog', role: 'img', 'aria-label': `${into}% of the way to ${next?.level ?? 'the next level'}` },
+    h('span', { style: { width: `${into}%` } }));
+}
+
+// The figure picks out a group; the table rows pick out the same one.
+let showFigureGroup = () => {};
+
+/** The figure: hovering, clicking or tabbing to a muscle names its group and picks out its row. */
+function bodyFigure(d) {
+  const wrap = h('div', { class: 'figure-wrap' });
+  // Built by the server from fixed shapes; group names are escaped there.
+  wrap.innerHTML = figureMode === 'relative' && d.figureRelative ? d.figureRelative : d.figure;
+  const readout = h('p', { class: 'hint figure-readout', 'aria-live': 'polite' }, 'Point at a muscle, or tab to its number, to see its score.');
+  const byId = new Map(d.scores.groups.map((g) => [g.id, g]));
+  const show = (id) => {
+    const g = byId.get(id);
+    if (!g) return;
+    readout.textContent = `${g.name}: ${g.score ?? '—'} · ${levelText(g)}${g.best ? ` — ${g.best.exercise}, ${liftText(g.best)}` : ''}`;
+    wrap.querySelectorAll('.bf-m, .bf-num').forEach((m) => m.classList.toggle('bf-on', m.dataset.group === id));
+    document.querySelectorAll('.strength-row').forEach((r) => r.classList.toggle('on', r.dataset.group === id));
+  };
+  showFigureGroup = show;
+  wrap.addEventListener('pointerover', (e) => e.target.dataset?.group && show(e.target.dataset.group));
+  wrap.addEventListener('click', (e) => e.target.dataset?.group && show(e.target.dataset.group));
+  wrap.addEventListener('focusin', (e) => e.target.dataset?.group && show(e.target.dataset.group));
+  const mode = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Shading' },
+    [['relative', 'vs your average'], ['level', 'Level']].map(([v, name]) =>
+      h('button', { type: 'button', role: 'radio', class: v === figureMode ? 'on' : '', 'aria-checked': String(v === figureMode), onclick: () => {
+        figureMode = v;
+        remember('raqib.figureMode', v);
+        render();
+      } }, name)));
+  return [h('div', { class: 'row figure-mode' }, mode), wrap, readout, h('div', { class: 'chart-legend figure-legend' }, FIGURE_LEGEND[figureMode].map(([cls, name]) => h('span', {}, h('i', { class: `key bf-key ${cls}` }), name)))];
+}
+
+function balanceRow(p) {
+  const lean = p.diff === null ? 0 : Math.max(-1, Math.min(1, p.diff / 200));
+  return h('div', { class: 'bal' },
+    h('div', { class: 'bal-names' }, h('span', {}, `${p.a.name} `, h('b', { class: 'num' }, p.a.score ?? '—')), h('span', {}, h('b', { class: 'num' }, p.b.score ?? '—'), ` ${p.b.name}`)),
+    h('div', { class: 'bal-track', role: 'img', 'aria-label': p.message },
+      h('i', { class: 'bal-mid' }),
+      p.diff !== null ? h('span', { class: `bal-fill${p.status === 'balanced' ? ' ok' : ''}`, style: lean < 0 ? { left: '50%', width: `${-lean * 50}%` } : { right: '50%', width: `${lean * 50}%` } }) : null),
+    h('p', { class: 'hint' }, p.status === 'balanced' ? '✓ Balanced' : p.status === 'unknown' ? p.message : `⚠ ${p.message}`));
+}
+
+/** The next level and, when that's far, a nearer step; with how big a jump it is on the bar. */
+function nextCell(g) {
+  if (!g.next || !g.best) return '—';
+  const jump = g.best.weight && g.next.weight ? Math.round(((g.next.weight - g.best.weight) / g.best.weight) * 100) : null;
+  return [
+    g.milestone ? [h('div', {}, `Next +25: ${liftText(g.milestone)}`), h('div', { class: 'hint' }, `on ${g.best.exercise}`)] : null,
+    h('div', { class: g.milestone ? 'hint' : '' }, `${g.next.level}: ${liftText(g.next)}${jump !== null && jump > 0 ? ` (+${jump}%)` : ''}`),
+    g.milestone ? null : h('div', { class: 'hint' }, `on ${g.best.exercise}`),
+  ];
+}
+
+async function trainingStrength(key) {
+  let d;
+  try {
+    d = await api(`/training/strength?date=${key}&standards=${strengthStandards}`);
+  } catch (error) {
+    // This page is read from disk on each load, the server only at start: a tracker started
+    // before the strength score was added has no route for it yet.
+    if (error.message !== 'Not found') throw error;
+    return card('Strength score', 'Needs a restart', h('p', { class: 'empty' }, 'رقيب was started before the strength score was added. Restart it (raqib stop, then raqib start) to see this page.'));
+  }
+  const s = d.scores;
+  if (s.bodyweight === null) {
+    return card('Strength score', 'Scores are for your bodyweight', h('p', { class: 'empty' }, 'Log a weigh-in under Food and weight first.'));
+  }
+  // Weekly up to today: five points back is four weeks ago.
+  const then = d.trend.at(-5)?.overall ?? null;
+  const change = s.overall !== null && then !== null ? s.overall - then : null;
+  const b = d.balance;
+  const scored = s.groups.filter((g) => g.score !== null);
+  const off = b.pairs.filter((p) => p.status !== 'balanced');
+  const overallInto = intoLevel(s.overall);
+  const overallNext = s.overall !== null && s.overall < 500 ? (Math.floor(s.overall / 100) + 1) * 100 : null;
+  const nextName = overallNext ? ['Beginner', 'Novice', 'Intermediate', 'Advanced', 'Elite'][overallNext / 100 - 1] : null;
+  const weighed = s.bodyweightDay ? `weighed ${shortDay(s.bodyweightDay)}` : 'bodyweight';
+  const gains = (d.gains ?? []).filter((g) => g.change > 0).slice(0, 3);
+  return [
+    h('div', { class: 'stats' },
+      stat('Strength score', s.overall ?? '—', s.overall === null ? 'no recent lifts' : `${s.overallLevel ?? 'Below beginner'}${overallNext ? ` · ${overallNext - s.overall} to ${nextName}` : ''}`),
+      stat('Upper body', s.upper ?? '—', 'chest, back, shoulders, arms'),
+      stat('Lower body', s.lower ?? '—', 'quads, glutes, hamstrings'),
+      stat('Last 4 weeks', change === null ? '—' : `${change > 0 ? '+' : ''}${change}`, `points overall · ${n1(s.bodyweight)} kg, ${weighed}`),
+    ),
+    overallInto !== null ? h('div', { class: 'overall-prog' },
+      h('span', { class: 'hint' }, `${s.overallLevel ?? 'Below beginner'} ${Math.floor(s.overall / 100) * 100}`),
+      h('div', { class: 'lvl-prog wide', role: 'img', 'aria-label': `${overallInto}% of the way to ${nextName}` }, h('span', { style: { width: `${overallInto}%` } })),
+      h('span', { class: 'hint' }, `${nextName} ${overallNext}`)) : null,
+    d.focus?.length ? h('div', { style: { marginBottom: '16px' } }, focusCard(d.focus)) : null,
+    h('div', { class: 'grid cols-2' },
+      h('div', { class: 'stack' },
+        card('Muscle levels', figureMode === 'relative' ? 'Each group against the average of the others' : 'Each group shaded by its level: darker is stronger', ...bodyFigure(d)),
+        card('Over 6 months', 'Overall score, week by week',
+          timeChart({ label: 'Overall strength score week by week', height: 170, series: [{ name: 'Strength score', cls: 'actual', dots: true, points: d.trend.filter((p) => p.overall !== null).map((p) => ({ day: p.day, v: p.overall })) }], format: (v) => String(Math.round(v)) }),
+          gains.length ? h('p', { class: 'hint gains' }, 'Biggest gains: ', gains.map((g, i) => [i ? ', ' : '', h('b', {}, `${g.name} +${g.change}`)])) : null),
+      ),
+      h('div', { class: 'stack' },
+        card('Strength balance', 'Groups 40+ points apart are out of balance',
+          scored.length < 3
+            ? h('p', { class: 'empty' }, 'Train at least three muscle groups to see how they balance.')
+            : [
+                off.length ? null : h('p', { class: 'hint' }, '✓ Every pair is within 40 points.'),
+                b.pairs.map(balanceRow),
+                b.leading.length ? h('p', { class: 'hint' }, `Strongest: ${b.leading.map((g) => `${g.name} (+${g.ahead})`).join(', ')}.`) : null,
+              ]),
+      ),
+    ),
+    h('div', { style: { marginTop: '16px' } }, card('Muscle groups', 'Best lift in 90 days, as a 1RM on the reference lift for your weight; 100 points a level',
+      h('table', { class: 'plan-table strength-table' },
+        h('thead', {}, h('tr', {}, ['Group', 'Score · 6 months', 'Level', 'Best lift', 'Confidence', 'Next'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, s.groups.map((g) => h('tr', { class: 'strength-row', 'data-group': g.id, onpointerenter: () => showFigureGroup(g.id) },
+          h('td', {}, h('b', {}, g.name)),
+          h('td', {}, h('div', { class: 'score-cell' }, h('span', { class: 'num' }, g.score ?? '—'), scoreSparkline(d.trend.map((p) => p.groups[g.id] ?? null), `${g.name} over 6 months`))),
+          h('td', {}, h('span', { class: `badge${g.level ? ' accent' : ''}` }, levelText(g)), levelProgress(g.score, g.next)),
+          h('td', {}, g.best
+            ? [h('div', {}, g.best.exercise), h('div', { class: 'hint' }, `${liftText(g.best)} · ${shortDay(g.best.day)}`),
+                g.lapsed ? h('div', { class: 'hint warn-ink' }, `Not trained in 90 days · kept until ${shortDay(g.keptUntil)}`)
+                  : g.keptUntil && parseDay(g.keptUntil) - parseDay(key) <= 21 * 86400000 ? h('div', { class: 'hint warn-ink' }, `Ages out after ${shortDay(g.keptUntil)}`) : null]
+            : h('span', { class: 'hint' }, `Log a ${g.reference.toLowerCase()} or similar`)),
+          h('td', {}, confidenceCell(g)),
+          h('td', {}, nextCell(g)),
+        )))),
+      s.uncounted?.length ? h('details', { class: 'uncounted' }, h('summary', { class: 'hint' }, `${s.uncounted.length} logged ${s.uncounted.length === 1 ? 'lift counts' : 'lifts count'} toward no group (isolation work, or a lift it doesn't know)`), h('p', { class: 'hint' }, s.uncounted.join(' · '))) : null,
+      h('p', { class: 'hint', style: { marginTop: '12px' } },
+        `${strengthStandards === 'women' ? "Women's" : "Men's"} standards (change in `, h('a', { href: '#settings' }, 'Settings'), '). Dumbbell, cable and machine lifts convert conservatively; sets over 15 reps don\'t count.'))),
+  ];
+}
+
 function flaggedCard(list) {
   return card('Check these sets', 'Imported sets that look like typos are left out of the plan until you keep or remove them',
     h('ul', { class: 'list' }, list.slice(0, 20).map((s) => h('li', {},
@@ -4205,7 +4414,11 @@ async function healthPage(date) {
   );
   const head = h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Health'), h('p', {}, key === today() ? `Today, ${longDate(key)}` : longDate(key))), tabs);
   if (tab === 'exercise' && exerciseView !== 'log') {
-    const body = exerciseView === 'plan' ? await trainingPlan() : exerciseView === 'progress' ? await trainingProgress(key) : await trainingToday(key);
+    const body =
+      exerciseView === 'plan' ? await trainingPlan()
+      : exerciseView === 'progress' ? await trainingProgress(key)
+      : exerciseView === 'strength' ? await trainingStrength(key)
+      : await trainingToday(key);
     return [head, exerciseViewTabs(), body];
   }
   if (tab === 'exercise') {

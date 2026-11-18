@@ -52,6 +52,25 @@ describe('training plan routes in the window', () => {
     });
   }
 
+  it('scores strength for the bodyweight and draws the body figure', async () => {
+    const plan = (await call('/training/plan')).json;
+    const squat = plan.exercises.find((e: { exercise: { name: string } }) => e.exercise.name === 'Barbell Squat');
+    await call('/training/sets', 'POST', { date: '2026-11-09', exerciseId: squat.exercise.id, weight: 120, reps: 1 });
+    assert.equal((await call(`/training/strength?date=${TODAY}`)).json.scores.bodyweight, null);
+    journal.setWeighIn({ day: '2026-11-09', weight: 80, bodyFat: null, waist: null });
+    const s = (await call(`/training/strength?date=${TODAY}`)).json;
+    // 120 × 1 is a 124 kg 1RM, 1.55 × bodyweight: just past Intermediate.
+    const quads = s.scores.groups.find((g: { id: string }) => g.id === 'quads');
+    assert.equal(quads.score, 307);
+    assert.equal(quads.level, 'Intermediate');
+    assert.equal(s.scores.upper, null);
+    assert.match(s.figure, /data-group="quads" d="[^"]+"><title>Quads: 307 · Intermediate<\/title>/);
+    assert.match(s.figure, /class="bf-m bf-l3" data-group="quads"/);
+    assert.match(s.figure, /class="bf-m bf-none" data-group="chest"/);
+    assert.equal(s.balance.pairs.find((p: { id: string }) => p.id === 'upper-lower').status, 'unknown');
+    assert.equal((await call(`/training/strength?date=${TODAY}&standards=women`)).json.standards, 'women');
+  });
+
   it('seeds the plan, suggests from history, and gives a verdict as sets are logged', async () => {
     const plan = (await call('/training/plan')).json;
     assert.deepEqual(plan.days.map((d: { name: string }) => d.name), ['Upper A', 'Lower A', 'Upper B', 'Lower B']);

@@ -1332,6 +1332,16 @@ export class Journal {
     return rows.map((r) => ({ ...r, formReset: r.formReset === 1 }));
   }
 
+  /** Every set of every strength workout, for the strength score (strength.ts). */
+  strengthSets(): { day: string; exercise: string; weight: number | null; reps: number | null; flag: string | null }[] {
+    return this.db
+      .prepare(
+        `SELECT w.day, s.exercise, s.weight_kg AS weight, s.reps, s.flag FROM workout_sets s JOIN workouts w ON w.id = s.workout_id
+         WHERE w.kind = 'strength' ORDER BY w.day, s.id`,
+      )
+      .all() as { day: string; exercise: string; weight: number | null; reps: number | null; flag: string | null }[];
+  }
+
   /** A form reset or a note on one exercise in a workout. */
   setExerciseLog(workoutId: number, exercise: string, change: { formReset?: boolean; note?: string | null }): void {
     const current = this.db.prepare('SELECT form_reset, note FROM exercise_logs WHERE workout_id = ? AND exercise = ?').get(workoutId, exercise) as { form_reset: number; note: string | null } | undefined;

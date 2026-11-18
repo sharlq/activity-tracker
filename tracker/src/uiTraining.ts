@@ -7,6 +7,8 @@ import { parseLocalDate } from './dates.ts';
 import type { Journal, PlanExercise, PlanExerciseChange } from './journal.ts';
 import { expectedOn, shiftDay } from './progression.ts';
 import type { ExerciseState } from './trainingPlan.ts';
+import { bodyFigureSvg } from './bodyFigure.ts';
+import { strengthBalance, strengthFocus, strengthGains, strengthScores, strengthTrend } from './strength.ts';
 import { dashboard, exerciseState, nextPlanDay, planStates, todayView } from './trainingPlan.ts';
 
 type Body = Record<string, unknown>;
@@ -60,6 +62,25 @@ export function exerciseDetail(journal: Journal, id: number, today: string) {
     checkpoints,
     expectedToday: expectedOn(exercise.goals, today),
     days,
+  };
+}
+
+/** The strength score and balance on a day (strength.ts), with the body figure to show them. */
+export function strengthView(journal: Journal, date: string, standards: 'men' | 'women') {
+  const sets = journal.strengthSets();
+  const weighIns = journal.weighIns('0000-01-01', '9999-12-31').map((w) => ({ day: w.day, weight: w.weight }));
+  const scores = strengthScores(sets, weighIns, date, standards);
+  const balance = strengthBalance(scores);
+  const trend = strengthTrend(sets, weighIns, date, standards);
+  return {
+    standards,
+    scores,
+    balance,
+    focus: strengthFocus(scores, balance),
+    trend,
+    gains: strengthGains(trend),
+    figure: bodyFigureSvg(scores.groups, 'level'),
+    figureRelative: bodyFigureSvg(scores.groups, 'relative'),
   };
 }
 
@@ -200,6 +221,8 @@ export async function trainingRoutes(journal: Journal, method: string, route: st
   }
 
   if (method === 'GET' && route === '/training/progress') return done(200, dashboard(journal, day(url.searchParams.get('date') ?? today)));
+
+  if (method === 'GET' && route === '/training/strength') return done(200, strengthView(journal, day(url.searchParams.get('date') ?? today), url.searchParams.get('standards') === 'women' ? 'women' : 'men'));
 
   if (method === 'GET' && route === '/training/flagged') return done(200, journal.flaggedSets());
   if ((m = /^\/training\/flagged\/(\d+)$/.exec(route)) && method === 'POST') {

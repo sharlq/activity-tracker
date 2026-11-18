@@ -14,6 +14,7 @@ import type * as lib_source from "../lib/source.js";
 import type * as lib_summary from "../lib/summary.js";
 import type * as migrations from "../migrations.js";
 import type * as plans from "../plans.js";
+import type * as strength from "../strength.js";
 import type * as sync from "../sync.js";
 import type * as training from "../training.js";
 
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   "lib/summary": typeof lib_summary;
   migrations: typeof migrations;
   plans: typeof plans;
+  strength: typeof strength;
   sync: typeof sync;
   training: typeof training;
 }>;

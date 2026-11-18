@@ -49,6 +49,10 @@ npm run check-parity                             # the cloud's suggestions match
   `push-from-pc` sends the PC's plan up only the first time (as "Main plan"); after that the
   phone owns plans (`-- --replace-plan` overwrites them with the PC's).
 - `convex/training.ts`: today, log a set, remove a set, rest length, finish, summary, past.
+- `convex/strength.ts`: the strength score and strength balance (#/strength), from the
+  shared `../tracker/src/strength.ts`. Each muscle group's best lift in 90 days, as a 1RM
+  on its reference lift for your bodyweight, scored 100 points per level (Beginner …
+  Elite); the overall score is the mean of upper and lower body.
 - `convex/sync.ts`: what the PC calls with the sync key (push the plan and history; later,
   pull what was logged here).
 - `src/`: the page. `timer.ts` counts down to a time rather than by ticks, so a locked
