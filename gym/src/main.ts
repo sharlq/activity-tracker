@@ -48,7 +48,8 @@ let today: TodayResult | undefined;
 let date = localDay();
 let dayNum: number | undefined;
 let open: number | null = null;
-const inputs = new Map<number, { weight: number; reps: number }>();
+/** What you changed in the steppers; reps go back to the next set's aim once a set is logged. */
+const inputs = new Map<number, { weight?: number; reps?: number }>();
 /** Sets sent but not yet confirmed (shown greyed until Convex has them). */
 const pending: { id: number; exercise: number; weight: number; reps: number; at: number }[] = [];
 let pendingId = 0;
@@ -187,12 +188,31 @@ function done(e: Exercise): number {
   return e.logged.length + pending.filter((p) => p.exercise === e.num).length;
 }
 
+/**
+ * Today's reps to aim for, set by set, at the suggested weight. "Same weight: beat your reps"
+ * becomes one more than last time on each set; a set already at or past the top of the range
+ * aims to match it (never fewer than last time). A set with nothing at this weight before
+ * (new lift, weight just added, or a set more than last time) aims for the bottom of the range.
+ */
+function aimsOf(e: Exercise): number[] {
+  return Array.from({ length: Math.max(1, e.sets) }, (_, i) => {
+    const last = e.beat?.[i];
+    if (last === undefined) return e.repMin;
+    return last >= e.repMax ? last : Math.max(e.repMin, last + 1);
+  });
+}
+const aimAt = (e: Exercise, i: number) => {
+  const aims = aimsOf(e);
+  return aims[i] ?? (aims.at(-1) as number);
+};
+
 function defaults(e: Exercise): { weight: number; reps: number } {
   const set = inputs.get(e.num);
-  if (set) return set;
+  const mine = pending.filter((p) => p.exercise === e.num).at(-1);
   const last = e.logged.at(-1);
-  const weight = last ? (last.weight ?? 0) : e.suggested;
-  const reps = last?.reps ?? e.beat?.[e.logged.length] ?? e.beat?.at(-1) ?? e.repMin;
+  const weight = set?.weight ?? mine?.weight ?? (last ? (last.weight ?? 0) : e.suggested);
+  // At the suggested weight the next set's aim; at another, what you did last set.
+  const reps = set?.reps ?? (weight === e.suggested ? aimAt(e, done(e)) : (mine?.reps ?? last?.reps ?? e.repMin));
   return { weight, reps };
 }
 
@@ -260,6 +280,8 @@ async function logSet(e: Exercise, all: Exercise[]): Promise<void> {
   const id = ++pendingId;
   const at = Date.now();
   pending.push({ id, exercise: e.num, weight, reps, at });
+  // The weight carries on (it's the last set's now); reps start again from the next set's aim.
+  inputs.delete(e.num);
   const n = done(e);
   // Rest starts now; the last set of an exercise moves on to the next one.
   const next = n >= e.sets ? all.find((x) => x.num !== e.num && done(x) < x.sets) : undefined;
@@ -382,11 +404,11 @@ function sinceLastSet(t: { exercises: Exercise[]; workout: { end: number | null 
   return h('span', { class: 'since', role: 'timer', 'aria-label': 'Time since your last set' }, 'Since last set ', value);
 }
 
-/** Reps against the same set last time, at the same weight. */
-function compared(reps: number | null, target: number | undefined): HTMLElement | null {
-  if (reps === null || target === undefined) return null;
-  const d = reps - target;
-  return h('span', { class: `set-cmp${d > 0 ? ' good' : d < 0 ? ' warn' : ''}` }, d > 0 ? `+${d} on last time` : d < 0 ? `−${-d} on last time` : 'same as last time');
+/** Reps against today's aim for that set, at the suggested weight. */
+function compared(reps: number | null, aim: number | undefined): HTMLElement | null {
+  if (reps === null || aim === undefined) return null;
+  const d = reps - aim;
+  return h('span', { class: `set-cmp${d >= 0 ? ' good' : ' warn'}` }, d > 0 ? `aim ${aim}, beat by ${d}` : d < 0 ? `aim ${aim}, ${-d} short` : `hit aim ${aim}`);
 }
 
 /** Pieces joined with " · ". */
@@ -434,7 +456,7 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
             },
           },
           h('span', { class: 'set-no' }, `Set ${i + 1}`),
-          h('span', { class: 'set-what' }, `${wLabel(w, e)} × ${s.reps ?? '—'}`, dotted(compared(s.reps, e.beat && atAim(w) ? e.beat[i] : undefined), gap !== undefined ? `rested ${mmss(gap)}` : null, effortOf(s.rpe)?.label ?? null)),
+          h('span', { class: 'set-what' }, `${wLabel(w, e)} × ${s.reps ?? '—'}`, dotted(compared(s.reps, atAim(w) ? aimAt(e, i) : undefined), gap !== undefined ? `rested ${mmss(gap)}` : null, effortOf(s.rpe)?.label ?? null)),
           icon(PENCIL),
         ),
       );
@@ -443,21 +465,33 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
       .filter((p) => p.exercise === e.num)
       .map((p, i) => h('li', { class: 'set saving' }, h('span', { class: 'set-no' }, `Set ${e.logged.length + i + 1}`), h('span', { class: 'set-what' }, `${wLabel(p.weight, e)} × ${p.reps}`), h('span', { class: 'muted small' }, online ? 'saving…' : 'waiting for signal'))),
   ];
+  // Sets still to do: weight × today's aim, and last time's reps beside it.
+  const lastTime = (k: number) => (e.beat && atAim(weight) && e.beat[k] !== undefined ? `last time ${e.beat[k]}` : null);
   if (!complete && !editing) {
-    const target = e.beat && atAim(weight) ? e.beat[count] : undefined;
     rows.push(
       h(
         'li',
         { class: 'set current' },
         h('span', { class: 'set-no' }, `Set ${count + 1}`),
-        h('span', { class: 'set-what' }, h('span', { id: 'cur-what' }, `${wLabel(weight, e)} × ${reps}`), dotted(target !== undefined ? `last time ${target}` : `${e.repMin}–${e.repMax} reps`)),
+        h(
+          'span',
+          { class: 'set-what' },
+          h('span', { id: 'cur-what' }, `${wLabel(weight, e)} × ${reps}`),
+          dotted(atAim(weight) ? h('strong', { class: 'set-aim' }, `aim ${aimAt(e, count)}`) : `${e.repMin}–${e.repMax} reps`, lastTime(count)),
+        ),
         h('button', { class: 'btn primary', onclick: () => void logSet(e, all), 'aria-label': `Log set ${count + 1}` }, 'Log'),
       ),
     );
   }
   for (let k = complete ? e.sets : count + 1; k < e.sets; k++) {
-    const target = e.beat && atAim(weight) ? e.beat[k] : undefined;
-    rows.push(h('li', { class: 'set future' }, h('span', { class: 'set-no' }, `Set ${k + 1}`), h('span', { class: 'set-what' }, wLabel(weight, e), dotted(target !== undefined ? `last time ${target}` : `${e.repMin}–${e.repMax} reps`))));
+    rows.push(
+      h(
+        'li',
+        { class: 'set future' },
+        h('span', { class: 'set-no' }, `Set ${k + 1}`),
+        h('span', { class: 'set-what' }, atAim(weight) ? h('span', null, wLabel(weight, e), ' × ', h('strong', { class: 'set-aim' }, String(aimAt(e, k)))) : `${wLabel(weight, e)} × ${e.repMin}–${e.repMax}`, dotted(lastTime(k))),
+      ),
+    );
   }
 
   // One tap for how the set just logged felt; it goes once answered, or once another set is in.
@@ -530,7 +564,7 @@ function dock(t: Today, e: Exercise): HTMLElement {
   const count = done(e);
   const { weight, reps } = defaults(e);
   const set = (patch: Partial<{ weight: number; reps: number }>) => {
-    inputs.set(e.num, { ...defaults(e), ...patch });
+    inputs.set(e.num, { ...inputs.get(e.num), ...patch });
     updateLive(e);
   };
   return h(

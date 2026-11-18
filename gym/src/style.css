@@ -313,7 +313,9 @@ select.field { appearance: auto; }
 .bf-none { fill: var(--bf-core); stroke-dasharray: 2.5 1.5; }
 .bf-l0 { fill: var(--bf-l0); } .bf-l1 { fill: var(--bf-l1); } .bf-l2 { fill: var(--bf-l2); }
 .bf-l3 { fill: var(--bf-l3); } .bf-l4 { fill: var(--bf-l4); } .bf-l5 { fill: var(--bf-l5); }
-.bf-m.bf-on { stroke: var(--ink); stroke-width: 2.5; }
+/* The picked group keeps its own thin outline; the rest fade back so it stands out. */
+.bf-m.bf-on { stroke: var(--bf-edge); stroke-width: 1; }
+.body-figure:has(.bf-on) .bf-m:not(.bf-on), .body-figure:has(.bf-on) .bf-fx { opacity: 0.4; }
 .bf-label { fill: var(--ink-muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
 .figure-legend .bf-key, .bf-legend .bf-key { width: 12px; height: 12px; border: 0; border-radius: 3px; }
 .bf-key.bf-none { background: transparent; border: 1px dashed var(--ink-muted); }
@@ -390,6 +392,7 @@ button.set { width: 100%; border: 0; font: inherit; color: inherit; text-align: 
 .set-what { display: grid; min-width: 0; }
 .set-sub { font-size: 13px; font-weight: 400; color: var(--ink-muted); }
 .set-cmp.good { color: var(--good); font-weight: 600; }
+.set-aim { color: var(--accent-ink); font-weight: 700; }
 .set-cmp.warn { color: var(--dawn-ink); font-weight: 600; }
 .icon { display: inline-flex; color: var(--ink-muted); flex: none; }
 .effort-ask { display: grid; gap: 8px; padding: 12px; border-radius: 12px; background: var(--panel-2); }
@@ -420,4 +423,5 @@ button.set { width: 100%; border: 0; font: inherit; color: inherit; text-align: 
 .left-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .left-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: var(--panel-2); }
 .left-list li > span:first-child { font-weight: 600; min-width: 0; }
+.left-list li > span:last-child { white-space: nowrap; flex: none; }
 .left-list li.part { background: var(--dawn-soft); color: var(--dawn-ink); }
