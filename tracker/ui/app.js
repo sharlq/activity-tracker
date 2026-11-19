@@ -1231,7 +1231,7 @@ function checkinCard(dayKeyValue, part, checkins, refresh, { title, note, withNo
 function moodSummaryCard(day, refresh) {
   const morning = day.checkins.find((c) => c.part === 'morning');
   const evening = day.checkins.find((c) => c.part === 'evening');
-  if (!morning && day.date === today()) return checkinCard(day.date, 'morning', day.checkins, refresh, { title: 'Check in: how are you feeling?' });
+  if ((morning?.mood == null || morning?.energy == null) && day.date === today()) return checkinCard(day.date, 'morning', day.checkins, refresh, { title: 'Check in: how are you feeling?' });
   const line = (label, c) =>
     h('div', { class: 'part' }, h('span', {}, label), h('span', {}, c ? `${ratingText(MOODS, c.mood)} · energy ${c.energy ?? '—'}/5` : 'not yet'));
   return card(
