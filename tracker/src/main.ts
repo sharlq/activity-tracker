@@ -237,6 +237,8 @@ async function gymSync(args: string[]): Promise<number> {
     console.error(`Gym sync is not set up. Make ${join(dataDir(), GYM_SYNC_FILE)} holding:\n  { "url": "https://….convex.cloud", "syncKey": "your SYNC_KEY" }`);
     return 1;
   }
+  // The sync writes straight to the database, so bring it up to the newest schema first.
+  openStore().close();
   const r = await pushToGym(join(dataDir(), 'data.db'), target, { replacePlan: args.includes('--replace-plan') });
   console.log(`From the phone: ${r.pulled} workout(s) saved${r.removed ? `, ${r.removed} removed` : ''}`);
   console.log(r.planPushed ? 'Plan: sent, as "Main plan"' : 'Plan: left as it is (the phone owns plans; --replace-plan overwrites them)');
