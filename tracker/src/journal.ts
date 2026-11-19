@@ -759,11 +759,10 @@ export class Journal {
     return rows.map(proposalFromRow);
   }
 
-  /** The proposal waiting to be looked over, for a week not yet over; the newest if there are several. */
-  waitingProposal(today: string): Proposal | null {
-    const rows = this.db.prepare("SELECT * FROM proposals WHERE status = 'waiting' ORDER BY created_ms DESC, id DESC").all() as ProposalRow[];
-    const live = rows.map(proposalFromRow).find((p) => p.days.some((d) => d.day >= today));
-    return live ?? null;
+  /** Proposals waiting to be looked over that still have a day to come, one a week, the earliest week first. */
+  waitingProposals(today: string): Proposal[] {
+    const rows = this.db.prepare("SELECT * FROM proposals WHERE status = 'waiting' ORDER BY week, created_ms DESC, id DESC").all() as ProposalRow[];
+    return rows.map(proposalFromRow).filter((p) => p.days.some((d) => d.day >= today));
   }
 
   discardProposal(id: number, now = Date.now()): Proposal | null {

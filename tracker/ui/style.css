@@ -860,6 +860,13 @@ pre.code { background: var(--panel-2); border: 1px solid var(--line); border-rad
 .pp .page-head { margin-bottom: 4px; }
 .pp .card > header p.pp-sub { text-align: left; margin-top: 2px; }
 .pp-gap { gap: 16px; }
+.pp-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px; border-radius: var(--radius-md); background: var(--panel-2); border: 1px solid var(--line); justify-self: start; }
+.pp-tab { display: grid; gap: 1px; padding: 8px 14px; border-radius: var(--radius-sm); color: var(--ink-muted); text-decoration: none; border: 1px solid transparent; }
+.pp-tab b { font-size: 13.5px; font-weight: 650; color: var(--ink); }
+.pp-tab span { font-size: 12px; }
+.pp-tab:hover { background: var(--panel); }
+.pp-tab.on { background: var(--panel); border-color: var(--accent); box-shadow: var(--shadow-card); }
+.pp-tab.on b { color: var(--accent-ink); }
 .pp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
 .pp-aims { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .pp-aim { display: grid; gap: 6px; align-content: start; padding: 14px 16px; border-radius: var(--radius-md); background: var(--panel-2); border: 1px solid var(--line); transition: opacity 0.12s; }

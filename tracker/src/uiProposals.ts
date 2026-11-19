@@ -47,12 +47,13 @@ export async function proposalRoutes(
   let m: RegExpExecArray | null;
 
   if (method === 'GET' && route === '/proposals') {
-    const waiting = journal.waitingProposal(today);
+    const waiting = journal.waitingProposals(today);
+    const ids = new Set(waiting.map((p) => p.id));
     const history = journal
       .proposals(12)
-      .filter((p) => p.id !== waiting?.id && p.status !== 'replaced')
+      .filter((p) => !ids.has(p.id) && p.status !== 'replaced')
       .map((p) => ({ id: p.id, week: p.week, status: p.status, createdAt: p.createdAt, decidedAt: p.decidedAt, days: p.days.length, taken: p.choice?.days.length ?? 0 }));
-    send(response, 200, { waiting: waiting ? proposalView(journal, waiting, jobFor) : null, history });
+    send(response, 200, { waiting: waiting.map((p) => proposalView(journal, p, jobFor)), history, today });
     return true;
   }
   if ((m = /^\/proposals\/(\d+)$/.exec(route)) && method === 'GET') {

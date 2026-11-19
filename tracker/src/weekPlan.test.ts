@@ -133,10 +133,17 @@ describe('Journal proposals', () => {
     const first = journal.addProposal(plan, 1);
     const second = journal.addProposal(plan, 2);
     assert.equal(journal.proposal(first.id)?.status, 'replaced');
-    assert.equal(journal.waitingProposal(TODAY)?.id, second.id);
+    assert.deepEqual(journal.waitingProposals(TODAY).map((p) => p.id), [second.id]);
     assert.equal(journal.discardProposal(second.id, 3)?.status, 'discarded');
-    assert.equal(journal.waitingProposal(TODAY), null);
+    assert.deepEqual(journal.waitingProposals(TODAY), []);
     assert.equal(journal.discardProposal(second.id, 4), null, 'only a waiting one can be discarded');
+  });
+
+  it('keeps proposals for different weeks waiting side by side, the earliest week first', () => {
+    const next = journal.addProposal(plan, 1);
+    const thisWeek = journal.addProposal({ ...plan, week: '2026-11-16', days: [{ day: '2026-11-20', aims: [{ text: 'Gym', aim: null }], blocks: [] }] }, 2);
+    assert.deepEqual(journal.waitingProposals(TODAY).map((p) => p.id), [thisWeek.id, next.id]);
+    assert.deepEqual(journal.waitingProposals('2026-11-21').map((p) => p.id), [next.id], 'a proposal whose days are all past drops out');
   });
 
   it('applies the days you take and leaves the rest alone', () => {
