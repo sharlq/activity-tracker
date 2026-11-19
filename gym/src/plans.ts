@@ -1,9 +1,11 @@
 // The plans screens: every plan (#/plans), and one plan's days and exercises to edit
-// (#/plans/<num>). Each plan has its own days; the active one is what "today" follows.
+// (#/plans/<num>), and its weekly sets per muscle (#/plans/<num>/summary). Each plan has its own days; the active one is what "today" follows.
 // Changes save as you make them; the list updates itself from Convex.
 import type { ConvexClient } from 'convex/browser';
 import type { FunctionReturnType } from 'convex/server';
 import { api } from '../convex/_generated/api';
+import type { Contribution, MuscleLoad, Verdict } from './muscles.ts';
+import { MUSCLES, planLoad, verdict } from './muscles.ts';
 import { mmss } from './timer.ts';
 import { attempt, h, n1 } from './ui.ts';
 
@@ -71,11 +73,96 @@ export function plansScreen(data: PlanList, ctx: Ctx): HTMLElement[] {
             'div',
             { class: 'row' },
             h('a', { class: 'btn', href: `#/plans/${p.num}` }, 'Edit'),
+            h('a', { class: 'btn', href: `#/plans/${p.num}/summary` }, 'Summary'),
             p.active ? null : h('button', { class: 'btn primary', onclick: () => void attempt(() => client.mutation(api.plans.setActive, { key, planNum: p.num }), `Now following ${p.name}`) }, 'Use this plan'),
           ),
         );
       }),
       h('section', { class: 'card stack' }, h('strong', null, 'New plan'), nameIn, from, h('button', { class: 'btn primary big', onclick: () => void create() }, 'Create plan')),
+    ),
+  ];
+}
+
+// ------------------------------------------------------------------ a plan's summary
+
+const VERDICT: Record<Exclude<Verdict, null>, [string, string]> = {
+  low: ['warn', 'Low'],
+  ok: ['good', 'In range'],
+  high: ['warn', 'A lot'],
+  once: ['accent', 'Once a week'],
+};
+
+const sets = (n: number) => `${n1(n)} set${n === 1 ? '' : 's'}`;
+const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n}×`);
+
+function muscleRow(r: MuscleLoad, scale: number): HTMLElement {
+  const v = verdict(r);
+  const freq = r.days ? `${times(r.days)} a week` : r.helperDays ? `helper only, ${times(r.helperDays)} a week` : 'not trained';
+  const byDay = new Map<string, Contribution[]>();
+  for (const c of r.from) byDay.set(c.day, [...(byDay.get(c.day) ?? []), c]);
+  return h(
+    'li',
+    { class: 'ms-row' },
+    h(
+      'details',
+      null,
+      h(
+        'summary',
+        null,
+        h('span', { class: 'ms-name' }, r.muscle),
+        h('span', { class: 'ms-num' }, h('strong', null, n1(r.total)), h('span', { class: 'muted small' }, ' sets')),
+        h('span', { class: 'ms-bar', 'aria-hidden': 'true' },
+          h('span', { class: 'ms-direct', style: `width:${(r.direct / scale) * 100}%` }),
+          h('span', { class: 'ms-help', style: `width:${(r.indirect / 2 / scale) * 100}%` })),
+        h('span', { class: 'muted small ms-meta' }, freq, r.indirect ? ` · ${n1(r.direct)} direct + ${n1(r.indirect)} helping` : '', v ? ' · ' : '', v ? h('span', { class: `badge ${VERDICT[v][0]}` }, VERDICT[v][1]) : null),
+      ),
+      h(
+        'ul',
+        { class: 'ms-from small' },
+        ...[...byDay].map(([day, cs]) =>
+          h('li', null, h('strong', { dir: 'auto' }, day), ' ', h('span', { class: 'muted', dir: 'auto' }, cs.map((c) => `${c.exercise} ${c.sets}${c.main ? '' : ' (helps, ½)'}`).join(' · '))),
+        ),
+      ),
+    ),
+  );
+}
+
+export function planSummary(data: PlanList, planNum: number): HTMLElement[] {
+  const plan = data.plans.find((p) => p.num === planNum);
+  if (!plan) return [header('Plan not found', '#/plans', 'Plans'), h('p', { class: 'pad muted' }, 'It may have been removed.')];
+  const load = planLoad(plan.days);
+  const trained = load.muscles.filter((m) => m.total > 0);
+  const missing = load.muscles.filter((m) => m.total === 0);
+  const scale = Math.max(20, ...trained.map((m) => m.total));
+  const weekSets = load.days.reduce((n, d) => n + d.sets, 0);
+  const groups: [string, (m: MuscleLoad) => boolean][] = [
+    ['Upper body', (m) => MUSCLES.indexOf(m.muscle) < MUSCLES.indexOf('Abs')],
+    ['Trunk', (m) => m.muscle === 'Abs' || m.muscle === 'Lower back'],
+    ['Lower body', (m) => MUSCLES.indexOf(m.muscle) > MUSCLES.indexOf('Lower back')],
+  ];
+  return [
+    header('Weekly muscle summary', `#/plans/${planNum}`, 'Edit plan', plan.name),
+    h(
+      'main',
+      { class: 'pad-x stack' },
+      h(
+        'section',
+        { class: 'card' },
+        h('div', { class: 'ms-totals' },
+          h('div', null, h('strong', null, String(plan.days.length)), h('span', { class: 'muted small' }, 'days a week')),
+          h('div', null, h('strong', null, String(weekSets)), h('span', { class: 'muted small' }, 'sets a week')),
+          h('div', null, h('strong', null, String(trained.length)), h('span', { class: 'muted small' }, 'muscles worked'))),
+        h('ul', { class: 'ms-days small' }, ...load.days.map((d) => h('li', null, h('span', { dir: 'auto' }, d.name), h('span', { class: 'muted' }, `${d.sets} sets`)))),
+        h('p', { class: 'muted small' }, 'Counts one pass through the plan\'s days as a week. Sets on a main muscle count in full; sets where a muscle only helps count as half. A rough growth range is about 10–20 sets, over 2 days, a week.'),
+      ),
+      ...groups.map(([title, test]) => {
+        const rows = trained.filter(test);
+        return rows.length ? h('section', { class: 'card' }, h('strong', null, title), h('ul', { class: 'ms-list' }, ...rows.map((r) => muscleRow(r, scale)))) : null;
+      }),
+      missing.length ? h('section', { class: 'card' }, h('strong', null, 'Not trained'), h('p', { class: 'muted small' }, missing.map((m) => m.muscle).join(' · '))) : null,
+      load.unknown.length
+        ? h('section', { class: 'card' }, h('strong', null, 'Not counted'), h('p', { class: 'muted small', dir: 'auto' }, 'These names weren\'t recognised: ', load.unknown.map((u) => `${u.exercise} (${u.day})`).join(' · ')))
+        : null,
     ),
   ];
 }
@@ -228,6 +315,7 @@ export function planEditor(data: PlanList, planNum: number, ctx: Ctx): HTMLEleme
       { class: 'pad-x stack' },
       namesList(data.names),
       h('label', { class: 'form-field' }, h('span', { class: 'step-label' }, 'Plan name'), title),
+      h('a', { class: 'btn', href: `#/plans/${planNum}/summary` }, 'Weekly muscle summary'),
       plan.active
         ? h('p', { class: 'muted small' }, 'Today follows this plan. Days come in this order, then start again.')
         : h('button', { class: 'btn primary big', onclick: () => void attempt(() => client.mutation(api.plans.setActive, { key, planNum }), `Now following ${plan.name}`) }, 'Use this plan'),

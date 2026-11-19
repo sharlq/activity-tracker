@@ -1,6 +1,6 @@
 // رقيب at the gym. Screens on the hash: today's plan day a set at a time (#/), a workout's
 // summary (#/summary/<num>), past workouts (#/history), strength score and balance
-// (#/strength, in strength.ts), and plans (#/plans, #/plans/<num>,
+// (#/strength, in strength.ts), and plans (#/plans, #/plans/<num>, #/plans/<num>/summary,
 // in plans.ts). The plans and the engine's suggestions come from Convex; the rest timer
 // runs here (timer.ts).
 import { ConvexClient } from 'convex/browser';
@@ -8,7 +8,7 @@ import type { FunctionReturnType } from 'convex/server';
 import { api } from '../convex/_generated/api';
 import './style.css';
 import type { PlanList } from './plans.ts';
-import { planEditor, plansScreen } from './plans.ts';
+import { planEditor, plansScreen, planSummary } from './plans.ts';
 import type { StrengthResult } from './strength.ts';
 import { bodyweightChoice, standardsChoice, strengthScreen } from './strength.ts';
 import { addRest, canKeepAwake, keepingAwake, mmss, onRest, remaining, restNow, setKeepAwake, startRest, stopRest, unlockSound } from './timer.ts';
@@ -73,18 +73,21 @@ function renderPlans(): void {
   const y = window.scrollY;
   if (r.name === 'plans') app.replaceChildren(...plansScreen(plans, ctx));
   else if (r.name === 'plan') app.replaceChildren(...planEditor(plans, r.num, ctx));
+  else if (r.name === 'planSummary') app.replaceChildren(...planSummary(plans, r.num));
   window.scrollTo(0, y);
 }
 
 const app = document.getElementById('app') as HTMLElement;
 
-type Route = { name: 'today' } | { name: 'summary'; num: number } | { name: 'history' } | { name: 'strength' } | { name: 'plans' } | { name: 'plan'; num: number };
+type Route = { name: 'today' } | { name: 'summary'; num: number } | { name: 'history' } | { name: 'strength' } | { name: 'plans' } | { name: 'plan'; num: number } | { name: 'planSummary'; num: number };
 
 function route(): Route {
   const m = /^#\/summary\/(\d+)$/.exec(location.hash);
   if (m) return { name: 'summary', num: Number(m[1]) };
   const p = /^#\/plans\/(\d+)$/.exec(location.hash);
   if (p) return { name: 'plan', num: Number(p[1]) };
+  const ps = /^#\/plans\/(\d+)\/summary$/.exec(location.hash);
+  if (ps) return { name: 'planSummary', num: Number(ps[1]) };
   if (location.hash === '#/plans') return { name: 'plans' };
   if (location.hash === '#/history') return { name: 'history' };
   if (location.hash === '#/strength') return { name: 'strength' };
@@ -115,7 +118,7 @@ function start(): void {
       today = v;
       render();
     });
-  } else if (r.name === 'plans' || r.name === 'plan') {
+  } else if (r.name === 'plans' || r.name === 'plan' || r.name === 'planSummary') {
     const k = key;
     if (plans) renderPlans();
     else app.replaceChildren(h('p', { class: 'muted pad' }, 'Loading plans…'));
