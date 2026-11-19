@@ -4,6 +4,7 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { checkSyncKey } from './access';
 import { nextNum } from './lib/nums';
+import { loadPlanView } from './lib/planView';
 import { planExerciseFields, workoutFields } from './schema';
 import { MACHINE_SWAPS, machineFor } from '../../tracker/src/machineSwap.ts';
 
@@ -167,6 +168,15 @@ export const importPlan = mutation({
       }
     }
     return { planNum, replaced: !!old, made };
+  },
+});
+
+/** Every plan made on the phone, with its days and exercises: for the PC's Plans tab to show (read only). */
+export const plans = query({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => {
+    checkSyncKey(key);
+    return loadPlanView(ctx);
   },
 });
 

@@ -3748,7 +3748,7 @@ function exerciseViewTabs() {
   return h(
     'div',
     { class: 'seg', role: 'tablist', 'aria-label': 'Exercise view', style: { marginBottom: '16px' } },
-    [['today', "Today's workout"], ['plan', 'Plan'], ['progress', 'Progress'], ['strength', 'Strength'], ['log', 'Log']].map(([t, name]) =>
+    [['today', "Today's workout"], ['plan', 'Plan'], ['plans', 'All plans'], ['progress', 'Progress'], ['strength', 'Strength'], ['log', 'Log']].map(([t, name]) =>
       h('button', {
         type: 'button',
         role: 'tab',
@@ -3914,6 +3914,81 @@ async function trainingPlan() {
       ),
     ),
     addExerciseCard(v),
+  ];
+}
+
+// ---- all plans (the phone's, read only) with their weekly sets per muscle
+
+let plansPick = (() => {
+  try {
+    return localStorage.getItem('raqib.plansPick');
+  } catch {
+    return null;
+  }
+})();
+
+const MUSCLE_VERDICT = { low: ['dawn', 'Low'], ok: ['good', 'In range'], high: ['dawn', 'A lot'], once: ['accent', 'Once a week'] };
+const timesAWeek = (n) => (n === 1 ? 'once a week' : n === 2 ? 'twice a week' : `${n}× a week`);
+
+function muscleCard(load) {
+  const trained = load.muscles.filter((m) => m.total > 0);
+  const scale = Math.max(20, ...trained.map((m) => m.total));
+  const missing = load.muscles.filter((m) => m.total === 0).map((m) => m.muscle);
+  return card('Weekly sets per muscle', 'Helper sets count as half',
+    h('div', { class: 'table-wrap' }, h('table', { class: 'plan-table muscle-table' },
+      h('thead', {}, h('tr', {}, ['Muscle', 'Days', 'Sets', '', 'From', ''].map((t) => h('th', {}, t)))),
+      h('tbody', {}, trained.map((m) => {
+        const v = m.verdict;
+        const byDay = new Map();
+        for (const c of m.from) byDay.set(c.day, [...(byDay.get(c.day) ?? []), `${c.exercise} ${c.sets}${c.main ? '' : ' (½)'}`]);
+        return h('tr', {},
+          h('td', {}, h('strong', {}, m.muscle)),
+          h('td', { class: 'num' }, m.days ? timesAWeek(m.days) : m.helperDays ? `helper, ${timesAWeek(m.helperDays)}` : '—'),
+          h('td', { class: 'num' }, h('strong', {}, n1(m.total)), m.indirect ? h('div', { class: 'hint' }, `${m.direct} direct + ${m.indirect} helping`) : null),
+          h('td', {}, h('div', { class: 'ms-bar', 'aria-hidden': 'true' },
+            h('span', { class: 'ms-direct', style: { width: `${(m.direct / scale) * 100}%` } }),
+            h('span', { class: 'ms-help', style: { width: `${(m.indirect / 2 / scale) * 100}%` } }))),
+          h('td', { class: 'hint ms-from' }, [...byDay].map(([d, list]) => h('div', {}, h('b', {}, d), ' ', list.join(' · ')))),
+          h('td', {}, v ? h('span', { class: `badge ${MUSCLE_VERDICT[v][0]}` }, MUSCLE_VERDICT[v][1]) : null),
+        );
+      })),
+    )),
+    h('p', { class: 'hint', style: { marginTop: '10px' } }, 'One pass through the days counts as a week. Sets count in full for the main muscle and as half for muscles that help (bench press: chest, with triceps helping). A rough growth range is about 10–20 sets over 2 days a week.'),
+    missing.length ? h('p', { class: 'hint' }, `Not trained: ${missing.join(' · ')}`) : null,
+    load.unknown.length ? h('p', { class: 'hint' }, `Not counted (name not recognised): ${load.unknown.map((u) => `${u.exercise} (${u.day})`).join(' · ')}`) : null,
+  );
+}
+
+async function trainingPlans() {
+  const v = await api('/training/plans');
+  const plan = v.plans.find((p) => p.name === plansPick) ?? v.plans.find((p) => p.active) ?? v.plans[0];
+  const pick = (name) => {
+    plansPick = name;
+    try {
+      localStorage.setItem('raqib.plansPick', name);
+    } catch {}
+    render();
+  };
+  const sets = plan.days.reduce((n, d) => n + d.exercises.reduce((k, e) => k + e.sets, 0), 0);
+  return [
+    v.error ? h('p', { class: 'hint', style: { marginBottom: '12px' } }, v.error, ' Showing this PC\'s plan.') : null,
+    v.source === 'phone' ? h('p', { class: 'hint', style: { marginBottom: '12px' } }, 'Plans from the gym app. Make and edit them on the phone.') : null,
+    h('div', { class: 'chips', style: { marginBottom: '16px' }, role: 'radiogroup', 'aria-label': 'Plan' },
+      v.plans.map((p) => h('button', { type: 'button', class: `chip${p === plan ? ' on' : ''}`, role: 'radio', 'aria-checked': String(p === plan), onclick: () => pick(p.name) }, p.name, p.active ? h('span', { class: 'badge accent' }, 'Active') : null))),
+    h('div', { class: 'stats' },
+      stat('Days a week', String(plan.days.length), plan.days.map((d) => d.name).join(' · ')),
+      stat('Sets a week', String(sets), plan.days.map((d) => d.exercises.reduce((k, e) => k + e.sets, 0)).join(' + ')),
+      stat('Muscles worked', String(plan.load.muscles.filter((m) => m.total > 0).length), `of ${plan.load.muscles.length}`),
+    ),
+    plan.note ? h('p', { class: 'hint', style: { margin: '0 0 12px' } }, plan.note) : null,
+    muscleCard(plan.load),
+    h('div', { class: 'plan-days' }, plan.days.map((d) =>
+      card(d.name, d.note,
+        d.exercises.length
+          ? h('table', { class: 'plan-table' },
+            h('thead', {}, h('tr', {}, ['Exercise', 'Sets × reps'].map((t) => h('th', {}, t)))),
+            h('tbody', {}, d.exercises.map((e) => h('tr', {}, h('td', {}, e.name, e.note ? h('div', { class: 'hint' }, e.note) : null), h('td', { class: 'num' }, `${e.sets} × ${e.repMin}–${e.repMax}`)))))
+          : h('p', { class: 'empty' }, 'No exercises yet.')))),
   ];
 }
 
@@ -4416,6 +4491,7 @@ async function healthPage(date) {
   if (tab === 'exercise' && exerciseView !== 'log') {
     const body =
       exerciseView === 'plan' ? await trainingPlan()
+      : exerciseView === 'plans' ? await trainingPlans()
       : exerciseView === 'progress' ? await trainingProgress(key)
       : exerciseView === 'strength' ? await trainingStrength(key)
       : await trainingToday(key);

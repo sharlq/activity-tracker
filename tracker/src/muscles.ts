@@ -1,4 +1,5 @@
-// Which muscles a plan works, and how much, for the plan summary (#/plans/<num>/summary).
+// Which muscles a plan works, and how much: the gym app's plan summary (#/plans/<num>/summary)
+// and the window's Plans tab both use it.
 // Each exercise is matched by name to the muscles it trains: a set counts in full for its
 // main muscles and as half a set for the ones that help (bench press: chest, with triceps
 // and front delts helping), the usual way weekly volume is counted. A plan is taken as one

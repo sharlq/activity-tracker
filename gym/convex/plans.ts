@@ -7,6 +7,7 @@ import type { MutationCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { checkGymKey } from './access';
 import { nextNum } from './lib/nums';
+import { planView } from './lib/planView';
 
 const nullable = <T extends Parameters<typeof v.union>[0]>(t: T) => v.union(t, v.null());
 
@@ -72,29 +73,7 @@ export const list = query({
     }
     for (const e of exercises) if (!used.has(e.name.toLowerCase())) used.set(e.name.toLowerCase(), { name: e.name, n: 0 });
     return {
-      plans: [...plans]
-        .sort((a, b) => Number(b.active) - Number(a.active) || a.createdAt - b.createdAt)
-        .map((p) => ({
-          num: p.num,
-          name: p.name,
-          note: p.note,
-          active: p.active,
-          days: days
-            .filter((d) => d.planNum === p.num)
-            .sort((a, b) => a.position - b.position || a.num - b.num)
-            .map((d) => ({
-              num: d.num,
-              name: d.name,
-              note: d.note,
-              exercises: exercises
-                .filter((e) => e.dayNum === d.num && e.active)
-                .sort((a, b) => a.position - b.position || a.num - b.num)
-                .map((e) => ({
-                  num: e.num, name: e.name, sets: e.sets, repMin: e.repMin, repMax: e.repMax, step: e.step, restSeconds: e.restSeconds,
-                  bodyweight: e.bodyweight, perHand: e.perHand, perSide: e.perSide ?? false, laterSlot: e.laterSlot, note: e.note,
-                })),
-            })),
-        })),
+      plans: planView(plans, days, exercises),
       names: [...used.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)).map((x) => x.name),
     };
   },
