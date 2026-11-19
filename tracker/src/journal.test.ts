@@ -219,6 +219,16 @@ describe('UI API', () => {
     assert.equal((await call('/v1/ui/reviews/2026-11-10', { method: 'PUT', headers: signedIn, body: { wentWell: 'x' } })).status, 400);
   });
 
+  it('saves what you learned on a day, and clears it when emptied', async () => {
+    assert.equal((await call('/v1/ui/learned', { method: 'PUT', headers: signedIn, body: { day: '2026-11-10', text: '- How WAL mode works' } })).status, 200);
+    assert.equal(journal.learning('2026-11-10')?.text, '- How WAL mode works');
+    journal.setLearning('2026-11-12', 'Deadlift bracing');
+    assert.deepEqual(journal.learningsBetween('2026-11-09', '2026-11-15').map((l) => l.day), ['2026-11-10', '2026-11-12']);
+    assert.equal((await call('/v1/ui/learned', { method: 'PUT', headers: signedIn, body: { day: '2026-11-10', text: '' } })).status, 200);
+    assert.equal(journal.learning('2026-11-10'), null);
+    assert.equal((await call('/v1/ui/learned', { method: 'PUT', headers: signedIn, body: { day: 'yesterday', text: 'x' } })).status, 400);
+  });
+
   it('builds a week, with the week before to compare', async () => {
     journal.setCheckin('2026-11-10', 'evening', { mood: 2 });
     journal.addEntry({ start: new Date(2026, 10, 9, 23).getTime(), end: new Date(2026, 10, 10, 7).getTime(), label: 'Sleep', category: 'sleep' });

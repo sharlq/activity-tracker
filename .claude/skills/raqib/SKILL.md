@@ -20,6 +20,8 @@ Run them as `node tracker/dist/main.js <command>` from that folder (the same as 
 | Mood and energy (1 low to 5 great), morning or evening | `checkin morning\|evening --mood 4 --energy 3 [--note "..."] [--date D]` |
 | Goals: up to three bigger aims a day | `goals [date]`, `goal add "text" [--date D]`, `goal met\|partly\|missed\|clear <id>`, `goal rm <id>` |
 | The day's plan: time blocks, each held up against what happened (kept, partly, missed) | `plan [date]`, `plan add 09:00-11:00 "Study AWS" --category study [--date tomorrow]`, `plan rm <id>`, `plan copy [from] [--to D]` (same clock times; default yesterday to today) |
+| Propose a whole week: aims for the week, each day's aims and blocks, each with a reason. It waits in the window (Proposed plan) until the user applies the days they take | `propose --file week.json [--dry-run]`, `proposals` (waiting, applied, discarded) |
+| The week's aims (from an applied proposal) | `aims [date]`, `aim met\|partly\|missed\|clear\|rm <id>` |
 | Sleep: the night the user woke from that day | `sleep [date]` (logged, or estimated from the PC; log it as an entry with `--category sleep` to confirm) |
 | The week (Monday to Sunday): weekly review | `week [date] [--json]` |
 | Reminders | `reminders`, `remind add "text" --every 1h [--from 09:00 --until 22:00] [--days mon,tue\|weekdays]`, `remind add "text" --at 09:00,21:00`, `remind on\|off\|rm <id>` |
@@ -62,6 +64,32 @@ Run them as `node tracker/dist/main.js <command>` from that folder (the same as 
 ## Mornings
 
 For "plan my day" or a morning chat: run `day yesterday` for a short recap (including how yesterday's plan held up) and `sleep` for last night, then ask how they feel (`checkin morning`). Run `plan`: if last night left a plan, read it back and ask what's changed (`plan rm`, then `plan add`, to move a block); if not, ask them to lay out the day in blocks (`plan add`), or offer `plan copy` from yesterday. Then ask for up to three goals (`goal add`), and offer to bring over yesterday's unfinished tasks.
+
+## Proposing a week
+
+When the user asks you to plan or propose their week ("propose a plan for next week"):
+
+1. **Read what the week has to fit around:** `week` (recent focus, sleep, goals met, what stood out), `projects` and `project show <id>` (deadlines and targets), `plan <date>` for days that already have a plan, `exercise` and `plan overview` for training, and the job hours in Settings (shown as the job band on Today). Ask only for what you can't find: fixed commitments that week, days off, anything they want more or less of.
+2. **Shape it:** up to 5 aims for the week (outcomes, not activities: "Ready for a full practice exam", not "Study"), each with a `how` line. For each day, up to 3 aims, each pointing at the week aim it serves (`"aim": 1`) or standing alone, and the day's main blocks with a `why` line. Keep evenings realistic against their recent weeks, leave real rest, and don't fill every hour. Use the categories from the list above (`focus` means any focused work).
+3. **Write the file** in your scratchpad directory:
+   ```json
+   {
+     "week": "2026-11-23",
+     "note": "Why the week is shaped this way, in two or three sentences.",
+     "basedOn": ["Job 07:00–16:00, Sun–Thu", "Gym 4 times"],
+     "aims": [{ "text": "Ready for a full practice exam", "how": "Two topics by Wednesday, the exam on Friday" }],
+     "days": {
+       "2026-11-23": {
+         "aims": [{ "text": "Finish notes on networking", "aim": 1 }, "Call the bank"],
+         "blocks": [{ "start": "17:00", "end": "18:15", "label": "Gym", "category": "exercise", "why": "Straight after the job." }]
+       }
+     }
+   }
+   ```
+   `week` is the Monday; days must fall in that week and not be past; blocks can't overlap; an end before the start runs past midnight. A day aim can be plain text.
+4. **`propose --file <path> --dry-run`**, fix any problems, read the warnings, then run it without `--dry-run`. A newer proposal for the same week replaces one still waiting.
+5. **Tell the user briefly** what you proposed (the week aims and the shape of the days) and that it's waiting under Proposed plan in the window: they untick days, switch off blocks or aims, and apply. Applying replaces a taken day's plan with the kept blocks, adds its kept aims as that day's goals, and sets the week aims. Nothing changes before that. If they ask for changes in chat, write a new file and propose again.
+6. In the weekly review, run `aims` and ask how each week aim went; mark it with `aim met|partly|missed <id>`.
 
 ## Projects: what they did today
 

@@ -13,6 +13,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { Store } from './store.ts';
+import type { WeekProposal } from './weekPlan.ts';
+import { addDays, checkProposal, mondayOfDay } from './weekPlan.ts';
 
 export const DEMO_DIR = join(homedir(), '.activity-tracker-demo');
 /** Away from the real window's 5610, with room above it: a taken port moves the demo up, never onto production. */
@@ -20,7 +22,7 @@ export const DEMO_PORT = 5630;
 /** The demo's own address. Browsers send every *.localhost name to this PC, and the demo answers to no other. */
 export const DEMO_HOST = 'raqib-demo.localhost';
 export const DEMO_TABS_DEFAULT = ['today', 'week', 'projects', 'health'];
-export const ALL_TABS = ['today', 'morning', 'evening', 'week', 'projects', 'health', 'reminders', 'settings'];
+export const ALL_TABS = ['today', 'morning', 'evening', 'week', 'proposed', 'projects', 'health', 'reminders', 'settings'];
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -451,8 +453,46 @@ export function seedDemo(dir: string, now: number, seed = 20261115): void {
 
     // The morning page already shown today, so opening the window doesn't jump to it.
     setting.run('state.morningShown', JSON.stringify(keyOf(now)));
+
+    // A proposed plan for next week, waiting to be looked over.
+    const proposal = demoProposal(now);
+    db.prepare("INSERT INTO proposals (week, body, status, created_ms) VALUES (?, ?, 'waiting', ?)").run(proposal.week, JSON.stringify(proposal), now - 3600_000);
   })();
   db.close();
+}
+
+/** Next week's proposal for the demo: aims for the week, and each day's aims and blocks. */
+export function demoProposal(now: number): WeekProposal {
+  const monday = addDays(mondayOfDay(keyOfDay(now)), 7);
+  const day = (i: number) => addDays(monday, i);
+  const b = (start: string, end: string, label: string, category: string | null, why: string) => ({ start, end, label, category, why });
+  const raw = {
+    week: monday,
+    note: 'Study sits right after the gym on job days, so each evening runs in one order and ends by 22:00. Project work moves to the weekend, where it gets longer stretches.',
+    basedOn: ['Job 07:00–16:00', 'Gym 3 times', 'Exam in two weeks'],
+    aims: [
+      { text: 'Ready for a full practice exam', how: 'Two topics by Wednesday, the exam on Saturday, its mistakes reviewed on Sunday.' },
+      { text: 'Ship the portfolio site', how: 'Pages on Tuesday and Thursday, then it goes live on Friday.' },
+      { text: 'Train three times, keep one evening free', how: 'Gym straight after the job, so evenings stay in one order.' },
+    ],
+    days: {
+      [day(0)]: { aims: [{ text: 'Finish notes on networking', aim: 1 }], blocks: [b('17:00', '18:15', 'Gym', 'exercise', 'Straight after the job, before the evening fills up.'), b('19:00', '20:30', 'Study: networking', 'learning', 'The topic the exam weighs most.')] },
+      [day(1)]: { aims: [{ text: 'Build the projects page', aim: 2 }], blocks: [b('17:00', '19:00', 'Portfolio: projects page', 'work', 'Two hours while the design is fresh.'), b('19:30', '21:00', 'Study: practice set', 'learning', 'Questions on Monday’s topic, to see what stuck.')] },
+      [day(2)]: { aims: [{ text: 'Cover storage', aim: 1 }, { text: 'A calm evening with family', aim: 3 }], blocks: [b('17:00', '18:15', 'Gym', 'exercise', 'Two days after Monday’s session.'), b('19:00', '20:30', 'Study: storage', 'learning', 'The next topic in order.'), b('20:45', '22:30', 'Family evening', 'social', 'Kept clear so the middle of the week has a pause.')] },
+      [day(3)]: { aims: [{ text: 'Finish the about page', aim: 2 }], blocks: [b('17:00', '19:00', 'Portfolio: about page', 'work', 'The last page before it goes live.')] },
+      [day(4)]: { aims: [{ text: 'Put the site live', aim: 2 }], blocks: [b('10:00', '11:30', 'Portfolio: go live', 'work', 'A quiet morning to deploy and check.'), b('12:00', '15:00', 'Lunch with friends', 'social', 'Left whole.')] },
+      [day(5)]: { aims: [{ text: 'Sit one full timed practice exam', aim: 1 }, { text: 'Third session of the week', aim: 3 }], blocks: [b('09:00', '11:15', 'Practice exam', 'learning', 'A full timed exam in the quietest morning of the week.'), b('17:00', '18:15', 'Gym', 'exercise', 'Third session, at an easy hour.')] },
+      [day(6)]: { aims: [{ text: 'List the topics to revisit', aim: 1 }, { text: 'Look back on the week', aim: null }], blocks: [b('19:00', '20:30', 'Study: review the exam', 'learning', 'Go through what Saturday’s exam got wrong.'), b('21:00', '21:45', 'Look back and plan ahead', null, 'Weekly review, then ask for the next proposal.')] },
+    },
+  };
+  const checked = checkProposal(raw, keyOfDay(now));
+  if (!checked.ok) throw new Error(`demo proposal: ${checked.errors.join('; ')}`);
+  return checked.plan;
+}
+
+function keyOfDay(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /** Categories for the demo: the same rules as a fresh install, with nothing personal in them. */

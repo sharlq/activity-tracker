@@ -334,6 +334,39 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE workout_sets ADD COLUMN logged_ms INTEGER;
   `,
+  // What you learned each day, in your own words.
+  `
+  CREATE TABLE learnings (
+    day        TEXT PRIMARY KEY,
+    text       TEXT NOT NULL,
+    updated_ms INTEGER NOT NULL
+  );
+  `,
+  // Proposed plans for a week (aims, and each day's aims and blocks), waiting to be looked
+  // over, and the aims for a week you took from one.
+  `
+  CREATE TABLE proposals (
+    id         INTEGER PRIMARY KEY,
+    week       TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('waiting', 'applied', 'discarded', 'replaced')),
+    choice     TEXT,
+    created_ms INTEGER NOT NULL,
+    decided_ms INTEGER
+  );
+  CREATE INDEX idx_proposals_week ON proposals (week);
+
+  CREATE TABLE week_aims (
+    id         INTEGER PRIMARY KEY,
+    week       TEXT NOT NULL,
+    position   INTEGER NOT NULL,
+    text       TEXT NOT NULL,
+    how        TEXT,
+    result     TEXT CHECK (result IN ('met', 'partly', 'missed')),
+    created_ms INTEGER NOT NULL
+  );
+  CREATE INDEX idx_week_aims_week ON week_aims (week);
+  `,
 ];
 
 /** Brings a database up to the newest schema. Safe to call from several connections. */
@@ -449,7 +482,7 @@ export class Store {
 
   /**
    * Deletes events, background audio, other screens, and your logged entries that ended before
-   * the cutoff, and tasks, check-ins, goals, day plans, weekly reviews, and project history
+   * the cutoff, and tasks, check-ins, goals, day plans, weekly reviews, what you learned, week aims and proposals, and project history
    * (progress, notes, targets) for days before it, then reclaims the file space.
    * Returns how many events went.
    */
@@ -475,6 +508,9 @@ export class Store {
           this.db.prepare('DELETE FROM goals WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM plan_blocks WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM reviews WHERE week < ?').run(day).changes +
+          this.db.prepare('DELETE FROM learnings WHERE day < ?').run(day).changes +
+          this.db.prepare('DELETE FROM week_aims WHERE week < ?').run(day).changes +
+          this.db.prepare('DELETE FROM proposals WHERE week < ?').run(day).changes +
           this.db.prepare('DELETE FROM progress WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM project_days WHERE day < ?').run(day).changes +
           this.db.prepare('DELETE FROM targets WHERE day < ?').run(day).changes,
