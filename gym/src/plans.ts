@@ -4,8 +4,8 @@
 import type { ConvexClient } from 'convex/browser';
 import type { FunctionReturnType } from 'convex/server';
 import { api } from '../convex/_generated/api';
-import type { Contribution, MuscleLoad, Verdict } from './muscles.ts';
-import { MUSCLES, planLoad, verdict } from './muscles.ts';
+import type { Contribution, MuscleLoad, Verdict } from '../../tracker/src/muscles.ts';
+import { MUSCLES, planLoad, verdict } from '../../tracker/src/muscles.ts';
 import { mmss } from './timer.ts';
 import { attempt, h, n1 } from './ui.ts';
 

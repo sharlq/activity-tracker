@@ -10,6 +10,7 @@
 
 import type * as access from "../access.js";
 import type * as lib_nums from "../lib/nums.js";
+import type * as lib_planView from "../lib/planView.js";
 import type * as lib_source from "../lib/source.js";
 import type * as lib_summary from "../lib/summary.js";
 import type * as migrations from "../migrations.js";
@@ -27,6 +28,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   access: typeof access;
   "lib/nums": typeof lib_nums;
+  "lib/planView": typeof lib_planView;
   "lib/source": typeof lib_source;
   "lib/summary": typeof lib_summary;
   migrations: typeof migrations;

@@ -1,5 +1,6 @@
 // The window's training-plan routes under /v1/ui/training: today's workout from the plan,
-// logging it a set at a time, an exercise's detail, the plan, and the progress dashboard.
+// logging it a set at a time, an exercise's detail, the plan, every plan with its weekly sets
+// per muscle (the phone's plans, read from the gym app), and the progress dashboard.
 // ui.ts has already checked the cookie and header before these run.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError, readJson, send } from './api.ts';
@@ -8,6 +9,11 @@ import type { Journal, PlanExercise, PlanExerciseChange } from './journal.ts';
 import { expectedOn, shiftDay } from './progression.ts';
 import type { ExerciseState } from './trainingPlan.ts';
 import { bodyFigureSvg } from './bodyFigure.ts';
+import { dataDir } from './config.ts';
+import type { GymTarget } from './gymSync.ts';
+import { convexQuery, loadGymTarget } from './gymSync.ts';
+import type { MuscleLoad, PlanLoad, Verdict } from './muscles.ts';
+import { planLoad, verdict } from './muscles.ts';
 import { strengthBalance, strengthFocus, strengthGains, strengthScores, strengthTrend } from './strength.ts';
 import { dashboard, exerciseState, nextPlanDay, planStates, todayView } from './trainingPlan.ts';
 
@@ -114,6 +120,45 @@ function exerciseChange(raw: Body, days: number[]): PlanExerciseChange & { goals
   return change;
 }
 
+interface ViewExercise { name: string; sets: number; repMin: number; repMax: number; note: string | null }
+interface ViewPlan { name: string; note: string | null; active: boolean; days: { name: string; note: string | null; exercises: ViewExercise[] }[] }
+
+/** Where the phone's plans are; replaced in tests. */
+export const plansSource = {
+  target: (): GymTarget | null => loadGymTarget(dataDir()),
+  fetch: undefined as Parameters<typeof convexQuery>[3],
+};
+
+/**
+ * Every plan to look at: the phone's (where plans are made and edited) when this PC syncs with
+ * the gym app, else this PC's own one plan. Each comes with its weekly sets per muscle.
+ */
+export async function plansView(journal: Journal): Promise<{ source: 'phone' | 'pc'; error: string | null; plans: (ViewPlan & { load: Omit<PlanLoad, 'muscles'> & { muscles: (MuscleLoad & { verdict: Verdict })[] } })[] }> {
+  const withLoad = (p: ViewPlan) => {
+    const load = planLoad(p.days);
+    return { ...p, load: { ...load, muscles: load.muscles.map((m) => ({ ...m, verdict: verdict(m) })) } };
+  };
+  const pcPlan = (): ViewPlan => {
+    const exercises = journal.planExercises();
+    return {
+      name: "This PC's plan", note: null, active: true,
+      days: journal.planDays().map((d) => ({ name: d.name, note: d.note, exercises: exercises.filter((e) => e.dayId === d.id).map((e) => ({ name: e.name, sets: e.sets, repMin: e.repMin, repMax: e.repMax, note: e.note })) })),
+    };
+  };
+  let error: string | null = null;
+  try {
+    const target = plansSource.target();
+    if (target) {
+      const plans = (await convexQuery(target, 'sync:plans', {}, plansSource.fetch)) as ViewPlan[];
+      return { source: 'phone', error: null, plans: plans.map(withLoad) };
+    }
+  } catch (e) {
+    const text = (e as Error).message;
+    error = /Could not find public function/.test(text) ? 'The gym app is not updated yet: deploy it to see the phone\'s plans here.' : `Couldn't reach the gym app: ${text}`;
+  }
+  return { source: 'pc', error, plans: [withLoad(pcPlan())] };
+}
+
 /** Handles a training route; false when the route isn't one of these. */
 export async function trainingRoutes(journal: Journal, method: string, route: string, url: URL, request: IncomingMessage, response: ServerResponse, today: string, now: number): Promise<boolean> {
   if (!route.startsWith('/training')) return false;
@@ -180,6 +225,8 @@ export async function trainingRoutes(journal: Journal, method: string, route: st
     const { days, states } = planStates(journal, today);
     return done(200, { today, days, checkpoints: journal.checkpoints(), bodyGoals: journal.bodyGoals(), exercises: states.map(brief) });
   }
+
+  if (method === 'GET' && route === '/training/plans') return done(200, await plansView(journal));
 
   if (method === 'POST' && route === '/training/exercises') {
     const raw = ((await readJson(request)) ?? {}) as Body;
