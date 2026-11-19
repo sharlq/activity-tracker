@@ -55,6 +55,9 @@ type Row = Record<string, unknown>;
 export const GYM_FIRST_NUM = 100_000_000;
 /** The settings row holding the last phone change already pulled (ms). */
 export const GYM_PULLED_KEY = 'gym.pulledUntil';
+/** The time slot a session finished on the phone is logged as. */
+export const GYM_SLOT_LABEL = 'Gym training';
+export const GYM_SLOT_CATEGORY = 'exercise';
 
 /** Everything the gym app gets from the PC, read from the database without changing it. */
 export function collectForGym(dbFile: string) {
@@ -156,7 +159,12 @@ export interface GymWorkout {
   logs: { exercise: string; formReset: boolean; note: string | null }[];
 }
 
-/** Writes phone workouts into the database: new and changed ones replace what's here, deleted ones go. */
+/**
+ * Writes phone workouts into the database: new and changed ones replace what's here, deleted ones go.
+ * A session finished on the phone (a start and a finish) is also logged as a time slot, Gym training,
+ * tied to the workout: syncing again moves it, deleting the workout removes it. One you already
+ * logged by hand as exercise over that time is left as it is, and no second one is added.
+ */
 export function applyGymWorkouts(dbFile: string, workouts: GymWorkout[]): { saved: number; removed: number; until: number | null } {
   const db = new Database(dbFile, { fileMustExist: true });
   db.pragma('busy_timeout = 5000');
@@ -174,6 +182,17 @@ export function applyGymWorkouts(dbFile: string, workouts: GymWorkout[]): { save
     const addSet = db.prepare(`INSERT INTO workout_sets (id, workout_id, position, exercise, set_no, reps, weight_kg, rpe, seconds, distance_m, flag, logged_ms)
       VALUES (@num, @workout, @position, @exercise, @setNo, @reps, @weight, @rpe, @seconds, @distance, @flag, @at)`);
     const addLog = db.prepare('INSERT OR REPLACE INTO exercise_logs (workout_id, exercise, form_reset, note) VALUES (?, ?, ?, ?)');
+    const slotOf = db.prepare('SELECT id FROM entries WHERE workout_id = ?');
+    const moveSlot = db.prepare('UPDATE entries SET start_ms = ?, end_ms = ? WHERE id = ?');
+    const loggedByHand = db.prepare('SELECT 1 FROM entries WHERE workout_id IS NULL AND category = ? AND start_ms < ? AND end_ms > ? LIMIT 1');
+    const addSlot = db.prepare('INSERT INTO entries (start_ms, end_ms, label, category, created_ms, workout_id) VALUES (?, ?, ?, ?, ?, ?)');
+    const dropSlot = db.prepare('DELETE FROM entries WHERE workout_id = ?');
+    const logSlot = (w: GymWorkout) => {
+      if (w.start === null || w.end === null || w.end <= w.start) return; // not finished yet
+      const slot = slotOf.get(w.num) as { id: number } | undefined;
+      if (slot) moveSlot.run(w.start, w.end, slot.id);
+      else if (!loggedByHand.get(GYM_SLOT_CATEGORY, w.end, w.start)) addSlot.run(w.start, w.end, GYM_SLOT_LABEL, GYM_SLOT_CATEGORY, Date.now(), w.num);
+    };
     db.transaction(() => {
       for (const w of workouts) {
         until = Math.max(until ?? 0, w.updatedAt);
@@ -181,6 +200,7 @@ export function applyGymWorkouts(dbFile: string, workouts: GymWorkout[]): { save
         if (w.num < GYM_FIRST_NUM) continue;
         if (w.deleted) {
           removed += drop(w.num);
+          dropSlot.run(w.num);
           continue;
         }
         drop(w.num);
@@ -189,6 +209,7 @@ export function applyGymWorkouts(dbFile: string, workouts: GymWorkout[]): { save
         addWorkout.run({ ...w, id: w.num, minutes, externalId: null, source: 'gym' });
         for (const s of w.sets) addSet.run({ ...s, workout: w.num });
         for (const l of w.logs) addLog.run(w.num, l.exercise, l.formReset ? 1 : 0, l.note);
+        logSlot(w);
         saved++;
       }
       if (until !== null) db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(GYM_PULLED_KEY, JSON.stringify(until));

@@ -367,6 +367,12 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_week_aims_week ON week_aims (week);
   `,
+  // A time slot logged for you from a session finished in the gym app: the workout it came
+  // from, so syncing again moves the slot instead of adding a second one.
+  `
+  ALTER TABLE entries ADD COLUMN workout_id INTEGER;
+  CREATE UNIQUE INDEX idx_entries_workout ON entries (workout_id) WHERE workout_id IS NOT NULL;
+  `,
 ];
 
 /** Brings a database up to the newest schema. Safe to call from several connections. */
