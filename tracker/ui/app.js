@@ -4579,11 +4579,47 @@ function planSwitch(checked, onchange, label, key) {
   return h('label', { class: 'switch', title: label }, h('input', { type: 'checkbox', checked, onchange, 'aria-label': label, 'data-k': key }), h('span', { class: 'knob' }));
 }
 
-async function proposedPage() {
+/** "This week", "Next week", or the week's dates, for a proposal's tab. */
+function proposalWeekName(week) {
+  const monday = mondayOf(today());
+  return week === monday ? 'This week' : week === shiftDay(monday, 7) ? 'Next week' : `Week of ${new Date(parseDay(week)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
+}
+
+/** The days a proposal covers, as "19–22 November". */
+function proposalSpan(p) {
+  const first = new Date(parseDay(p.days[0].day));
+  const last = new Date(parseDay(p.days[p.days.length - 1].day));
+  const month = (d) => d.toLocaleDateString('en-GB', { month: 'long' });
+  if (p.days.length === 1) return `${first.getDate()} ${month(first)}`;
+  return first.getMonth() === last.getMonth() ? `${first.getDate()}–${last.getDate()} ${month(last)}` : `${first.getDate()} ${month(first)} – ${last.getDate()} ${month(last)}`;
+}
+
+/** Back to the proposals list after one is applied or discarded. */
+async function afterProposal() {
+  if (location.hash === '#proposed') await render();
+  else location.hash = '#proposed';
+}
+
+async function proposedPage(arg) {
   const data = await api('/proposals');
-  if (!data.waiting) return proposalEmpty(data.history);
-  const p = data.waiting;
+  if (!data.waiting.length) return proposalEmpty(data.history);
+  const p = data.waiting.find((x) => String(x.id) === arg) ?? data.waiting[0];
   const now = today();
+  const tabs =
+    data.waiting.length > 1
+      ? h(
+          'nav',
+          { class: 'pp-tabs', 'aria-label': 'Proposals waiting' },
+          data.waiting.map((x) =>
+            h(
+              'a',
+              { class: `pp-tab${x.id === p.id ? ' on' : ''}`, href: `#proposed/${x.id}`, 'aria-current': x.id === p.id ? 'page' : null },
+              h('b', {}, proposalWeekName(x.week)),
+              h('span', { class: 'num' }, `${proposalSpan(x)} · ${x.days.length} day${x.days.length === 1 ? '' : 's'}`),
+            ),
+          ),
+        )
+      : null;
   const firstOpen = p.days.findIndex((d) => d.day >= now);
   const st = { sel: Math.max(0, firstOpen), off: new Set(p.days.filter((d) => d.day < now).map((d) => d.day)), dropBlocks: new Set(), dropAims: new Set(), dropWeek: new Set() };
   const root = h('div', { class: 'pp' });
@@ -4605,7 +4641,7 @@ async function proposedPage() {
         body: { days, dropBlocks: [...st.dropBlocks], dropAims: [...st.dropAims], dropWeekAims: [...st.dropWeek] },
       });
       say(`Applied to ${r.days} day${r.days === 1 ? '' : 's'}: ${r.blocks} blocks, ${r.goals} day aims, ${r.weekAims} week aims`);
-      await render();
+      await afterProposal();
     } catch (error) {
       handle(error);
     }
@@ -4615,7 +4651,7 @@ async function proposedPage() {
     try {
       await api(`/proposals/${p.id}/discard`, { method: 'POST' });
       say('Proposal discarded');
-      await render();
+      await afterProposal();
     } catch (error) {
       handle(error);
     }
@@ -4643,8 +4679,8 @@ async function proposedPage() {
       h(
         'div',
         {},
-        h('div', { class: 'overline', style: { marginBottom: '6px' } }, 'Proposed plan · waiting for you'),
-        h('h1', {}, `Your week, ${weekSpan(p.week)}`),
+        h('div', { class: 'overline', style: { marginBottom: '6px' } }, `Proposed plan · ${proposalWeekName(p.week).toLowerCase()} · waiting for you`),
+        h('h1', {}, p.days.length === 7 ? `Your week, ${weekSpan(p.week)}` : `Your days, ${proposalSpan(p)}`),
         h('p', {}, `Proposed on ${longDate(dayKey(p.createdAt))} at ${clock(p.createdAt)} · nothing changes until you apply it`),
       ),
       h(
@@ -4865,7 +4901,7 @@ async function proposedPage() {
       }),
     );
 
-    return [head, weekAims, h('div', { class: 'grid cols-2 pp-gap' }, why ?? h('div'), stats), grid, h('div', { class: 'grid cols-2 pp-gap' }, detail, diff)];
+    return [tabs, head, weekAims, h('div', { class: 'grid cols-2 pp-gap' }, why ?? h('div'), stats), grid, h('div', { class: 'grid cols-2 pp-gap' }, detail, diff)];
   }
 
   function paint() {
@@ -4967,7 +5003,8 @@ function proposalBadge() {
   api('/proposals')
     .then((data) => {
       link.querySelector('.nav-badge')?.remove();
-      if (data.waiting) link.append(h('i', { class: 'nav-badge', 'aria-label': 'One waiting' }, '1'));
+      const n = data.waiting.length;
+      if (n) link.append(h('i', { class: 'nav-badge', 'aria-label': `${n} waiting` }, String(n)));
     })
     .catch(() => {});
 }
@@ -5019,7 +5056,7 @@ async function render() {
   const ticket = ++rendering;
   const scroll = window.scrollY;
   try {
-    const arg = view === 'back' || view === 'projects' || view === 'exercise' ? date : /^\d{4}-\d{2}-\d{2}$/.test(date ?? '') ? date : undefined;
+    const arg = view === 'back' || view === 'projects' || view === 'exercise' || view === 'proposed' ? date : /^\d{4}-\d{2}-\d{2}$/.test(date ?? '') ? date : undefined;
     const content = await PAGES[view](arg);
     if (ticket !== rendering) return;
     main.replaceChildren(...[content].flat(Infinity).filter((node) => node !== null && node !== undefined && node !== false));
