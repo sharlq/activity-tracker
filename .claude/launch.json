@@ -27,6 +27,21 @@
       ],
       "port": 5630,
       "url": "http://raqib-demo.localhost:5630"
+    },
+    {
+      "name": "demo-all",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tracker/dist/main.js",
+        "demo",
+        "--no-open",
+        "--tabs",
+        "all",
+        "--port",
+        "5631"
+      ],
+      "port": 5631,
+      "url": "http://raqib-demo.localhost:5631"
     }
   ]
 }

@@ -12,6 +12,8 @@ import { overview } from './projects.ts';
 import type { ScreenSource } from './screens.ts';
 import { migrate } from './store.ts';
 import type { BodyGoal, CheckpointDay, PlanDay, PlanExercise, TrainingSet, WeighIn } from './trainingTypes.ts';
+import type { ApplyChoice, Proposal, ProposalStatus, WeekProposal } from './weekPlan.ts';
+import { blockTimes } from './weekPlan.ts';
 export type { BodyGoal, CheckpointDay, PlanDay, PlanExercise, TrainingSet, TrainingSource, WeighIn } from './trainingTypes.ts';
 
 export interface AudioSource {
@@ -88,11 +90,27 @@ export interface PlanBlock {
   category: string | null;
 }
 
+/** An aim for a whole week, taken from a proposed plan. `week` is its Monday. */
+export interface WeekAim {
+  id: number;
+  week: string;
+  text: string;
+  how: string | null;
+  result: GoalResult | null;
+}
+
 /** What you wrote looking back on a week. `week` is its Monday. */
 export interface Review {
   week: string;
   wentWell: string | null;
   toChange: string | null;
+  updatedAt: number;
+}
+
+/** What you wrote down that you learned on a day. */
+export interface Learning {
+  day: string;
+  text: string;
   updatedAt: number;
 }
 
@@ -373,6 +391,19 @@ export interface SubtaskChange {
 
 type PlanRow = { id: number; day: string; start_ms: number; end_ms: number; label: string; category: string | null };
 const planFromRow = (r: PlanRow): PlanBlock => ({ id: r.id, day: r.day, start: r.start_ms, end: r.end_ms, label: r.label, category: r.category });
+
+type ProposalRow = { id: number; week: string; body: string; status: ProposalStatus; choice: string | null; created_ms: number; decided_ms: number | null };
+const proposalFromRow = (r: ProposalRow): Proposal => ({
+  ...(JSON.parse(r.body) as WeekProposal),
+  id: r.id,
+  status: r.status,
+  createdAt: r.created_ms,
+  decidedAt: r.decided_ms,
+  choice: r.choice ? (JSON.parse(r.choice) as ApplyChoice) : null,
+});
+
+type WeekAimRow = { id: number; week: string; position: number; text: string; how: string | null; result: GoalResult | null };
+const weekAimFromRow = (r: WeekAimRow): WeekAim => ({ id: r.id, week: r.week, text: r.text, how: r.how, result: r.result });
 
 const taskFromRow = (row: TaskRow): Task => ({ id: row.id, day: row.day, text: row.text, doneAt: row.done_ms });
 const reminderFromRow = (row: ReminderRow): Reminder => ({
@@ -669,6 +700,141 @@ export class Journal {
       )
       .run(week, next.wentWell, next.toChange, now);
     return next;
+  }
+
+  // What you learned ----------------------------------------------------------
+
+  learning(day: string): Learning | null {
+    const row = this.db.prepare('SELECT day, text, updated_ms FROM learnings WHERE day = ?').get(day) as
+      | { day: string; text: string; updated_ms: number }
+      | undefined;
+    return row ? { day: row.day, text: row.text, updatedAt: row.updated_ms } : null;
+  }
+
+  /** Days from `fromDay` to `toDay` (inclusive) where you wrote something, oldest first. */
+  learningsBetween(fromDay: string, toDay: string): Learning[] {
+    const rows = this.db
+      .prepare('SELECT day, text, updated_ms FROM learnings WHERE day BETWEEN ? AND ? ORDER BY day')
+      .all(fromDay, toDay) as { day: string; text: string; updated_ms: number }[];
+    return rows.map((r) => ({ day: r.day, text: r.text, updatedAt: r.updated_ms }));
+  }
+
+  /** Saves what you learned on a day. Empty text clears it; returns null then. */
+  setLearning(day: string, text: string | null, now = Date.now()): Learning | null {
+    const trimmed = text?.trim() ? text : null;
+    if (!trimmed) {
+      this.db.prepare('DELETE FROM learnings WHERE day = ?').run(day);
+      return null;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO learnings (day, text, updated_ms) VALUES (?, ?, ?)
+         ON CONFLICT (day) DO UPDATE SET text = excluded.text, updated_ms = excluded.updated_ms`,
+      )
+      .run(day, trimmed, now);
+    return { day, text: trimmed, updatedAt: now };
+  }
+
+  // Proposed plans for a week, and the week's aims ----------------------------
+
+  /** Saves a proposal to look over. An earlier one still waiting for the same week is replaced. */
+  addProposal(plan: WeekProposal, now = Date.now()): Proposal {
+    return this.db.transaction(() => {
+      this.db.prepare("UPDATE proposals SET status = 'replaced', decided_ms = ? WHERE week = ? AND status = 'waiting'").run(now, plan.week);
+      const { lastInsertRowid } = this.db
+        .prepare("INSERT INTO proposals (week, body, status, created_ms) VALUES (?, ?, 'waiting', ?)")
+        .run(plan.week, JSON.stringify(plan), now);
+      return this.proposal(Number(lastInsertRowid)) as Proposal;
+    })();
+  }
+
+  proposal(id: number): Proposal | null {
+    const row = this.db.prepare('SELECT * FROM proposals WHERE id = ?').get(id) as ProposalRow | undefined;
+    return row ? proposalFromRow(row) : null;
+  }
+
+  /** The newest proposals first. */
+  proposals(limit = 20): Proposal[] {
+    const rows = this.db.prepare('SELECT * FROM proposals ORDER BY created_ms DESC, id DESC LIMIT ?').all(limit) as ProposalRow[];
+    return rows.map(proposalFromRow);
+  }
+
+  /** The proposal waiting to be looked over, for a week not yet over; the newest if there are several. */
+  waitingProposal(today: string): Proposal | null {
+    const rows = this.db.prepare("SELECT * FROM proposals WHERE status = 'waiting' ORDER BY created_ms DESC, id DESC").all() as ProposalRow[];
+    const live = rows.map(proposalFromRow).find((p) => p.days.some((d) => d.day >= today));
+    return live ?? null;
+  }
+
+  discardProposal(id: number, now = Date.now()): Proposal | null {
+    const changed = this.db.prepare("UPDATE proposals SET status = 'discarded', decided_ms = ? WHERE id = ? AND status = 'waiting'").run(now, id).changes;
+    return changed ? this.proposal(id) : null;
+  }
+
+  /**
+   * Applies the days you took: each one's plan is replaced by the blocks you kept, and the
+   * aims you kept are added as its goals. The week aims you kept become the week's aims.
+   * Days you didn't take, and days the proposal doesn't cover, are left as they are.
+   */
+  applyProposal(id: number, choice: ApplyChoice, now = Date.now()): { proposal: Proposal; days: number; blocks: number; goals: number; weekAims: number } | null {
+    return this.db.transaction(() => {
+      const proposal = this.proposal(id);
+      if (!proposal || proposal.status !== 'waiting') return null;
+      const taken = new Set(choice.days);
+      const dropBlocks = new Set(choice.dropBlocks);
+      const dropAims = new Set(choice.dropAims);
+      const dropWeek = new Set(choice.dropWeekAims);
+      let days = 0;
+      let blocks = 0;
+      let goals = 0;
+      for (const d of proposal.days) {
+        if (!taken.has(d.day)) continue;
+        days++;
+        this.db.prepare('DELETE FROM plan_blocks WHERE day = ?').run(d.day);
+        for (const [i, b] of d.blocks.entries()) {
+          if (dropBlocks.has(`${d.day}#${i}`)) continue;
+          this.addPlanBlock({ day: d.day, ...blockTimes(d.day, b.start, b.end), label: b.label, category: b.category }, now);
+          blocks++;
+        }
+        const existing = new Set(this.goals(d.day).map((g) => g.text.trim().toLowerCase()));
+        for (const [i, a] of d.aims.entries()) {
+          if (dropAims.has(`${d.day}#${i}`) || (a.aim !== null && dropWeek.has(a.aim))) continue;
+          if (existing.has(a.text.trim().toLowerCase())) continue;
+          this.addGoal(d.day, a.text, now);
+          goals++;
+        }
+      }
+      const have = new Set(this.weekAims(proposal.week).map((a) => a.text.trim().toLowerCase()));
+      let position = this.weekAims(proposal.week).length;
+      let weekAims = 0;
+      for (const [i, a] of proposal.aims.entries()) {
+        if (dropWeek.has(i + 1) || have.has(a.text.trim().toLowerCase())) continue;
+        this.db
+          .prepare('INSERT INTO week_aims (week, position, text, how, result, created_ms) VALUES (?, ?, ?, ?, NULL, ?)')
+          .run(proposal.week, position++, a.text, a.how, now);
+        weekAims++;
+      }
+      this.db.prepare("UPDATE proposals SET status = 'applied', choice = ?, decided_ms = ? WHERE id = ?").run(JSON.stringify(choice), now, id);
+      return { proposal: this.proposal(id) as Proposal, days, blocks, goals, weekAims };
+    })();
+  }
+
+  /** The aims for the week starting on `week` (its Monday), in order. */
+  weekAims(week: string): WeekAim[] {
+    const rows = this.db.prepare('SELECT * FROM week_aims WHERE week = ? ORDER BY position, id').all(week) as WeekAimRow[];
+    return rows.map(weekAimFromRow);
+  }
+
+  updateWeekAim(id: number, change: { text?: string; result?: GoalResult | null }): WeekAim | null {
+    const row = this.db.prepare('SELECT * FROM week_aims WHERE id = ?').get(id) as WeekAimRow | undefined;
+    if (!row) return null;
+    const next = { ...weekAimFromRow(row), ...change };
+    this.db.prepare('UPDATE week_aims SET text = ?, result = ? WHERE id = ?').run(next.text, next.result, id);
+    return next;
+  }
+
+  deleteWeekAim(id: number): boolean {
+    return this.db.prepare('DELETE FROM week_aims WHERE id = ?').run(id).changes > 0;
   }
 
   // Projects -----------------------------------------------------------------

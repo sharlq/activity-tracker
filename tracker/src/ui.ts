@@ -19,7 +19,7 @@ import { categoriesFile } from './config.ts';
 import { parseLocalDate } from './dates.ts';
 import type { PlanComparison } from './dayPlan.ts';
 import { comparePlan } from './dayPlan.ts';
-import type { Checkin, CheckinPart, Goal, GoalResult, Journal, PlanBlock, Reminder, Review } from './journal.ts';
+import type { Checkin, CheckinPart, Goal, GoalResult, Journal, Learning, PlanBlock, Reminder, Review, WeekAim } from './journal.ts';
 import type { Logger } from './logger.ts';
 import type { PlannerSettings, PlannerState } from './planner.ts';
 import { DEFAULT_SETTINGS, dayKey, jobWindow, mergeSettings, nextSlot, parseSchedule } from './planner.ts';
@@ -30,6 +30,7 @@ import { exerciseRoutes } from './uiExercise.ts';
 import { healthRoutes } from './uiHealth.ts';
 import { trainingRoutes } from './uiTraining.ts';
 import { projectRoutes } from './uiProjects.ts';
+import { proposalRoutes } from './uiProposals.ts';
 import type { Category, DayFigures, Gap, LoggedDistraction, Report, Segment, Sleep, WeekTotals } from './report/index.ts';
 import {
   buildReport,
@@ -74,7 +75,7 @@ const SECURITY_HEADERS = {
   'cache-control': 'no-store',
 };
 const COOKIE = 'raqib';
-const PAGES = new Set(['today', 'morning', 'evening', 'back', 'week', 'projects', 'health', 'reminders', 'settings']);
+const PAGES = new Set(['today', 'morning', 'evening', 'back', 'week', 'proposed', 'projects', 'health', 'reminders', 'settings']);
 
 /** Activities you might log for time away from the PC, besides the screen categories. */
 export const LIFE_CATEGORIES = ['sleep', 'in bed', 'sleep routine', 'pre shower', 'meal', 'exercise', 'errand', 'commute', 'social', 'rest', 'prayer', 'chores', 'study'];
@@ -201,6 +202,8 @@ export interface DayView {
   planComparison: PlanComparison;
   /** Morning and evening, whichever you've done. */
   checkins: Checkin[];
+  /** What you wrote that you learned that day. */
+  learned: Learning | null;
   sleep: Sleep;
   /** Focused time in each hour of the day, 0 to 23. */
   focusByHour: number[];
@@ -280,6 +283,7 @@ export async function buildDay(
     plan,
     planComparison: comparePlan(plan, segments, entries, now, categories.focus),
     checkins: deps.journal.checkins(date),
+    learned: deps.journal.learning(date),
     sleep,
     focusByHour,
     focus: categories.focus,
@@ -351,6 +355,10 @@ export interface WeekView {
   /** Sites, apps, and games in distraction categories, most time first. */
   distractions: { name: string; ms: number }[];
   review: Review | null;
+  /** What you learned on each day of the week that you wrote something. */
+  learned: Learning[];
+  /** The aims you took for the week from a proposed plan. */
+  aims: WeekAim[];
   focus: string[];
   distraction: string[];
   /** What each project did that week: running ones, and finished ones that moved. */
@@ -414,6 +422,8 @@ export async function buildWeek(deps: Pick<UiDeps, 'journal' | 'dbPath' | 'confi
     categories: ranked(byCategory).map(([category, ms]) => ({ category, ms })),
     distractions: ranked(distractions).slice(0, 8).map(([name, ms]) => ({ name, ms })),
     review: deps.journal.review(monday),
+    learned: deps.journal.learningsBetween(monday, addDays(monday, 6)),
+    aims: deps.journal.weekAims(monday),
     focus: current.views[0]?.focus ?? [],
     distraction: current.views[0]?.distraction ?? [],
     projects: (() => {
@@ -684,6 +694,12 @@ export function createUi(deps: UiDeps) {
       return send(response, 200, journal.setCheckin(day(body['day']), checkinPart(body['part']), change, now()));
     }
 
+    if (method === 'PUT' && route === '/learned') {
+      const body = (await readJson(request)) as Record<string, unknown>;
+      const learned = clearableText(body['text'], 'What you learned', 10_000);
+      return send(response, 200, { learned: journal.setLearning(day(body['day']), learned ?? null, now()) });
+    }
+
     if (method === 'POST' && route === '/goals') {
       const body = (await readJson(request)) as Record<string, unknown>;
       return send(response, 201, journal.addGoal(day(body['day']), text(body['text'], 'Goal', 200), now()));
@@ -786,6 +802,8 @@ export function createUi(deps: UiDeps) {
     if (await healthRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
     if (await exerciseRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
     if (await trainingRoutes(journal, method, route, url, request, response, dayKey(now()), now())) return;
+    const jobFor = (date: string) => jobWindow(readSettings(journal), parseLocalDate(date) as number);
+    if (await proposalRoutes(journal, method, route, request, response, dayKey(now()), now(), jobFor)) return;
     if (await projectRoutes(journal, method, route, url, request, response, dayKey(now()), (date) => pcTimeOn(deps, date))) return;
 
     throw new HttpError(404, 'not found');

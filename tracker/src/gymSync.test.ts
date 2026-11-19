@@ -117,3 +117,48 @@ test('pullFromGym: saves phone workouts, replaces changed ones, drops deleted on
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('applyGymWorkouts: a session finished on the phone is logged as a Gym training slot, once, and follows the workout', async () => {
+  const { applyGymWorkouts } = await import('./gymSync.ts');
+  const { Store } = await import('./store.ts');
+  const Database = (await import('better-sqlite3')).default;
+  const dir = folder();
+  const file = join(dir, 'data.db');
+  try {
+    new Store(file).close();
+    const start = 1_000_000_000;
+    const w = (num: number, updatedAt: number, extra: Record<string, unknown> = {}) => ({
+      num, day: '2026-11-17', start, end: start + 60 * 60_000, name: 'Upper A', kind: 'strength', minutes: null, calories: null,
+      note: null, source: 'manual', externalId: null, planDayNum: null, createdAt: 1, updatedAt, origin: 'gym', sets: [], logs: [], ...extra,
+    });
+    const slots = () => {
+      const db = new Database(file, { readonly: true });
+      try {
+        return db.prepare('SELECT start_ms, end_ms, label, category, workout_id FROM entries ORDER BY id').all();
+      } finally {
+        db.close();
+      }
+    };
+    // Not finished yet: no slot.
+    applyGymWorkouts(file, [w(100_000_001, 1, { end: null })]);
+    assert.deepEqual(slots(), []);
+    // Finished: one slot, and syncing it again adds no second one.
+    applyGymWorkouts(file, [w(100_000_001, 2)]);
+    applyGymWorkouts(file, [w(100_000_001, 3)]);
+    assert.deepEqual(slots(), [{ start_ms: start, end_ms: start + 3_600_000, label: 'Gym training', category: 'exercise', workout_id: 100_000_001 }]);
+    // Finished later: the slot moves with it.
+    applyGymWorkouts(file, [w(100_000_001, 4, { end: start + 75 * 60_000 })]);
+    assert.deepEqual(slots().map((s) => (s as { end_ms: number }).end_ms), [start + 75 * 60_000]);
+    // Deleted on the phone: the slot goes too.
+    applyGymWorkouts(file, [w(100_000_001, 5, { deleted: true })]);
+    assert.deepEqual(slots(), []);
+    // Already logged by hand as exercise over that time: left alone, nothing added.
+    const db = new Database(file);
+    db.prepare('INSERT INTO entries (start_ms, end_ms, label, category, created_ms) VALUES (?, ?, ?, ?, ?)').run(start - 10 * 60_000, start + 30 * 60_000, 'Gym', 'exercise', 1);
+    db.close();
+    applyGymWorkouts(file, [w(100_000_002, 6)]);
+    assert.deepEqual(slots().map((s) => (s as { label: string }).label), ['Gym']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

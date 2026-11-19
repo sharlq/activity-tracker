@@ -13,6 +13,7 @@ import { dbPath, id, openJournal, options, parseDay, UsageError } from './cliSha
 import { EXERCISE_COMMANDS, EXERCISE_USAGE, PLAN_USAGE } from './exerciseCli.ts';
 import { HEALTH_COMMANDS, HEALTH_USAGE } from './healthCli.ts';
 import { PROJECT_COMMANDS, PROJECTS_USAGE } from './projectsCli.ts';
+import { PROPOSAL_COMMANDS, PROPOSAL_USAGE } from './proposalCli.ts';
 import type { ReminderSchedule } from './planner.ts';
 import { dayKey, minutesOf, nextSlot, parseSchedule } from './planner.ts';
 import type { Sleep } from './report/index.ts';
@@ -38,6 +39,7 @@ export const JOURNAL_USAGE = `  raqib day [date] [--json]            Your day: s
   raqib remind add "text" --every 1h [--from 09:00 --until 22:00] [--days mon,tue]
   raqib remind add "text" --at 09:00,21:00 [--days ...]
                                       Add a reminder (also: remind on|off|rm <id>)
+${PROPOSAL_USAGE}
 ${PROJECTS_USAGE}
 ${HEALTH_USAGE}
 ${EXERCISE_USAGE}
@@ -204,6 +206,8 @@ async function day(args: string[]): Promise<number> {
     out.push('', 'Mood and energy');
     if (view.checkins.length === 0) out.push('  No check-ins.');
     for (const c of view.checkins) out.push(checkinLine(c));
+
+    if (view.learned) out.push('', 'What you learned', ...view.learned.text.split('\n').map((l) => `  ${l}`));
 
     out.push('', `Goals${view.goals.length ? ` (${view.goals.filter((g) => g.result === 'met').length}/${view.goals.length} met)` : ''}`);
     if (view.goals.length === 0) out.push('  None.');
@@ -527,6 +531,14 @@ async function week(args: string[]): Promise<number> {
         out.push(`    ${moved || (p.status === 'active' ? 'Nothing moved this week.' : 'Nothing moved.')}`);
       }
     }
+    if (view.aims.length) {
+      out.push('', `Aims for the week (${view.aims.filter((a) => a.result === 'met').length}/${view.aims.length} met)`);
+      for (const a of view.aims) out.push(`  #${a.id} ${a.result ? { met: '✓', partly: '~', missed: '✗' }[a.result] : '·'} ${a.text}`);
+    }
+    if (view.learned.length) {
+      out.push('', 'What you learned');
+      for (const l of view.learned) out.push(`  ${l.day}: ${l.text.replace(/\s*\n\s*/g, ' / ')}`);
+    }
     if (view.review?.wentWell || view.review?.toChange) {
       out.push('', 'Your review');
       if (view.review.wentWell) out.push(`  Went well: ${view.review.wentWell}`);
@@ -553,6 +565,7 @@ const COMMANDS: Record<string, (args: string[]) => number | Promise<number>> = {
   week,
   reminders,
   remind,
+  ...PROPOSAL_COMMANDS,
   ...PROJECT_COMMANDS,
   ...HEALTH_COMMANDS,
   ...EXERCISE_COMMANDS,

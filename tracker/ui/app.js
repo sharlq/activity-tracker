@@ -105,6 +105,7 @@ const ICONS = {
   scale: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M9 9.5a4 4 0 0 1 6 0M12 9.5l1-1.5"/>',
   phone: '<rect x="7" y="3.5" width="10" height="17" rx="2.5"/><path d="M11 17.5h2"/>',
   music: '<path d="M9 18V6.5l10-2v11.5"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
+  plan: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4M8 14h3M8 17h6"/>',
 };
 function icon(name, cls = 'ic') {
   const box = document.createElement('span');
@@ -1227,6 +1228,17 @@ function checkinCard(dayKeyValue, part, checkins, refresh, { title, note, withNo
   );
 }
 
+/** What you learned that day, written in the note editor and saved as you type. */
+function learnedCard(dayKeyValue, learned, { title } = {}) {
+  const editor = noteEditor({
+    value: learned?.text ?? '',
+    placeholder: 'An idea, a fact, a skill, a lesson from a mistake…\nTip: - for a list, **bold**',
+    label: 'What I learned',
+    onSave: (text) => api('/learned', { method: 'PUT', body: { day: dayKeyValue, text } }),
+  });
+  return card(title ?? (dayKeyValue === today() ? 'What I learned today' : 'What I learned'), null, editor);
+}
+
 /** Today page: both check-ins at a glance, with a link to fill in what's missing. */
 function moodSummaryCard(day, refresh) {
   const morning = day.checkins.find((c) => c.part === 'morning');
@@ -1591,6 +1603,7 @@ async function todayPage(date) {
             ? planEditor(key, [], refresh, day.entryCategories, { title: isToday ? 'Plan today' : 'Plan this day', copyFrom })
             : null,
         moodSummaryCard(day, refresh),
+        learnedCard(key, day.learned),
         goalsCard(key, day.goals, refresh, { title: isToday ? "Today's goals" : 'Goals', review: true, allowAdd: key >= today() }),
         projectsGlanceCard(key, projects),
         sleepCard(day, refresh, { title: isToday ? 'Last night' : 'Sleep' }),
@@ -1636,6 +1649,7 @@ async function eveningPage(date) {
         'div',
         { class: 'stack' },
         checkinCard(key, 'evening', day.checkins, refresh, { withNote: true, notePrompt: 'What affected your day, good or bad? (optional)' }),
+        learnedCard(key, day.learned),
         day.plan.length ? planVsActualCard(day, refresh, { title: 'Your plan vs what happened' }) : null,
         gapsCard(day, refresh, { title: 'Fill in the gaps' }),
         entriesCard(day, refresh),
@@ -1982,14 +1996,27 @@ async function weekPage(date) {
     ),
   );
 
+  const learnedBox = week.learned.length
+    ? card(
+        'What you learned',
+        `${week.learned.length} of 7 days`,
+        h('div', { class: 'learned-list' }, week.learned.map((l) =>
+          h('div', { class: 'learned-day' },
+            h('a', { class: 'learned-date', href: `#today/${l.day}` }, longDate(l.day)),
+            h('div', { class: 'note-preview' }, renderNote(l.text)),
+          ))),
+      )
+    : null;
+
   return [
     head,
     stats,
+    weekAimsCard(week),
     h('div', { class: 'grid' }, table),
     h(
       'div',
       { class: 'grid cols-2', style: { marginTop: '16px' } },
-      h('div', { class: 'stack' }, noticed, heat, reflect),
+      h('div', { class: 'stack' }, noticed, heat, learnedBox, reflect),
       h(
         'div',
         { class: 'stack' },
@@ -4525,6 +4552,426 @@ async function healthPage(date) {
   ];
 }
 
+// ------------------------------------------------------------------ proposed plan
+// A plan for a week that Claude proposed (raqib propose): aims for the week, and for each
+// day its aims and blocks. You look it over here and apply the days you take; nothing
+// changes on your days before that.
+
+/** Categories that count as focused time in a plan. */
+const PLAN_FOCUS = new Set(['work', 'learning', 'debate', 'study', 'focus']);
+const PP_HOUR = 32;
+
+function weekSpan(monday) {
+  const a = new Date(parseDay(monday));
+  const b = new Date(parseDay(shiftDay(monday, 6)));
+  const month = (d) => d.toLocaleDateString('en-GB', { month: 'long' });
+  return a.getMonth() === b.getMonth() ? `${a.getDate()}–${b.getDate()} ${month(b)}` : `${a.getDate()} ${month(a)} – ${b.getDate()} ${month(b)}`;
+}
+
+/** How a block is drawn: screen categories in their colour, things you'd log as soft notes, no category as plain. */
+function blockStyle(category) {
+  if (category === 'focus') return { cls: 'fill', color: 'var(--accent)' };
+  if (COLORS[category]) return { cls: 'fill', color: COLORS[category] };
+  return { cls: category ? 'lg' : 'nt', color: null };
+}
+
+function planSwitch(checked, onchange, label, key) {
+  return h('label', { class: 'switch', title: label }, h('input', { type: 'checkbox', checked, onchange, 'aria-label': label, 'data-k': key }), h('span', { class: 'knob' }));
+}
+
+async function proposedPage() {
+  const data = await api('/proposals');
+  if (!data.waiting) return proposalEmpty(data.history);
+  const p = data.waiting;
+  const now = today();
+  const firstOpen = p.days.findIndex((d) => d.day >= now);
+  const st = { sel: Math.max(0, firstOpen), off: new Set(p.days.filter((d) => d.day < now).map((d) => d.day)), dropBlocks: new Set(), dropAims: new Set(), dropWeek: new Set() };
+  const root = h('div', { class: 'pp' });
+
+  const taken = (d) => !st.off.has(d.day);
+  const blockKept = (d, i) => taken(d) && !st.dropBlocks.has(`${d.day}#${i}`);
+  const aimOn = (d, a, i) => !st.dropAims.has(`${d.day}#${i}`) && !(a.aim && st.dropWeek.has(a.aim));
+  const flip = (set, key) => () => {
+    set.has(key) ? set.delete(key) : set.add(key);
+    paint();
+  };
+
+  const apply = oneAtATime(async () => {
+    const days = p.days.filter(taken).map((d) => d.day);
+    if (!days.length) return say('Take at least one day', true);
+    try {
+      const r = await api(`/proposals/${p.id}/apply`, {
+        method: 'POST',
+        body: { days, dropBlocks: [...st.dropBlocks], dropAims: [...st.dropAims], dropWeekAims: [...st.dropWeek] },
+      });
+      say(`Applied to ${r.days} day${r.days === 1 ? '' : 's'}: ${r.blocks} blocks, ${r.goals} day aims, ${r.weekAims} week aims`);
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  const discard = oneAtATime(async () => {
+    if (!confirm('Discard this proposal? Your days stay as they are.')) return;
+    try {
+      await api(`/proposals/${p.id}/discard`, { method: 'POST' });
+      say('Proposal discarded');
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  });
+
+  function build() {
+    const takenDays = p.days.filter(taken);
+    const all = p.days.flatMap((d) => d.blocks.map((b, i) => ({ d, b, i })));
+    const kept = all.filter(({ d, i }) => blockKept(d, i));
+    const focusMs = kept.filter(({ b }) => PLAN_FOCUS.has(b.category)).reduce((n, { b }) => n + b.end - b.start, 0);
+    const exercise = kept.filter(({ b }) => b.category === 'exercise' || /\b(gym|train|workout)/i.test(b.label)).length;
+    const freeEvenings = takenDays.filter((d) => {
+      const from = onDay(d.day, '18:00');
+      const until = onDay(d.day, '22:00');
+      return !d.blocks.some((b, i) => blockKept(d, i) && b.start < until && b.end > from && b.category !== 'social' && b.category !== 'rest');
+    }).length;
+    const dayAims = p.days.flatMap((d) => d.aims.map((a, i) => ({ d, a, i })));
+    const dayAimsKept = dayAims.filter(({ d, a, i }) => taken(d) && aimOn(d, a, i)).length;
+    const weekKept = p.aims.filter((_, i) => !st.dropWeek.has(i + 1)).length;
+    const n = takenDays.length;
+
+    const head = h(
+      'div',
+      { class: 'page-head' },
+      h(
+        'div',
+        {},
+        h('div', { class: 'overline', style: { marginBottom: '6px' } }, 'Proposed plan · waiting for you'),
+        h('h1', {}, `Your week, ${weekSpan(p.week)}`),
+        h('p', {}, `Proposed on ${longDate(dayKey(p.createdAt))} at ${clock(p.createdAt)} · nothing changes until you apply it`),
+      ),
+      h(
+        'div',
+        { class: 'row' },
+        h('button', { class: 'btn ghost', onclick: discard }, 'Discard'),
+        h('button', { class: 'btn primary', onclick: apply, disabled: n === 0 }, icon('check'), n ? `Apply ${n} day${n === 1 ? '' : 's'}` : 'Nothing to apply'),
+      ),
+    );
+
+    const weekAims = h(
+      'section',
+      { class: 'card' },
+      h('header', {}, h('div', {}, h('h2', {}, 'Aims for the week'), h('p', { class: 'pp-sub' }, 'What the blocks are for. Switch one off to leave it, and the day aims under it, out of your week.')), h('p', {}, `${weekKept} of ${p.aims.length} week aims · ${dayAimsKept} of ${dayAims.length} day aims`)),
+      h(
+        'div',
+        { class: 'pp-aims' },
+        p.aims.map((a, i) => {
+          const on = !st.dropWeek.has(i + 1);
+          const days = p.days.filter((d) => d.aims.some((x) => x.aim === i + 1)).map((d) => new Date(parseDay(d.day)).toLocaleDateString('en-GB', { weekday: 'short' }));
+          return h(
+            'div',
+            { class: `pp-aim${on ? '' : ' off'}` },
+            h('div', { class: 'pp-aim-top' }, h('span', { class: 'pp-n' }, i + 1), planSwitch(on, flip(st.dropWeek, i + 1), `Keep week aim ${i + 1}`, `w${i}`)),
+            h('b', { dir: 'auto' }, a.text),
+            a.how ? h('span', { class: 'hint', dir: 'auto' }, a.how) : null,
+            days.length ? h('span', { class: 'pp-days' }, days.join(' · ')) : null,
+          );
+        }),
+      ),
+    );
+
+    const why = p.note || p.basedOn.length
+      ? card(
+          'Why this shape',
+          null,
+          p.note ? h('p', { dir: 'auto', style: { margin: '0 0 14px', lineHeight: '21px' } }, p.note) : null,
+          p.basedOn.length ? [h('div', { class: 'overline', style: { marginBottom: '8px' } }, 'Built around'), h('div', { class: 'chips' }, p.basedOn.map((b) => h('span', { class: 'badge', dir: 'auto' }, b)))] : null,
+        )
+      : null;
+    const stats = h(
+      'div',
+      { class: 'stats pp-stats' },
+      stat('Focus planned', duration(focusMs), 'Work, study, and debate blocks'),
+      stat('Exercise', String(exercise), exercise === 1 ? 'session' : 'sessions'),
+      stat('Free evenings', String(freeEvenings), 'Nothing from 18:00 to 22:00', 'dawn'),
+      stat('Blocks taken', `${kept.length}/${all.length}`, `over ${n} day${n === 1 ? '' : 's'}`),
+    );
+
+    // The grid: one column a day, from the earliest block (06:00 at the latest) to the last.
+    const starts = all.map(({ d, b }) => (b.start - parseDay(d.day)) / 3_600_000);
+    const ends = all.map(({ d, b }) => (b.end - parseDay(d.day)) / 3_600_000);
+    const fromH = Math.min(6, Math.floor(Math.min(24, ...starts)));
+    const toH = Math.max(24, Math.ceil(Math.max(0, ...ends)));
+    const height = (toH - fromH) * PP_HOUR;
+    const y = (d, ms) => ((ms - parseDay(d.day)) / 3_600_000 - fromH) * PP_HOUR;
+    const cols = { gridTemplateColumns: `44px repeat(${p.days.length}, minmax(0, 1fr))` };
+    const ticks = [];
+    for (let hr = Math.ceil(fromH / 2) * 2; hr <= toH; hr += 2) ticks.push(hr);
+
+    const changesOf = (d) => d.removed.length + d.blocks.filter((b) => b.was).length;
+    const grid = h(
+      'section',
+      { class: 'card' },
+      h('header', {}, h('div', {}, h('h2', {}, 'The week at a glance'), h('p', { class: 'pp-sub' }, 'Pick a day to see each block and why it’s there. Untick a day to leave it as it is.')), h('p', {}, `${kept.length} of ${all.length} blocks taken`)),
+      h(
+        'div',
+        { class: 'pp-scroll' },
+        h(
+          'div',
+          { class: 'pp-week' },
+          h(
+            'div',
+            { class: 'pp-row', style: cols },
+            h('div'),
+            p.days.map((d, k) => {
+              const past = d.day < now;
+              const changes = changesOf(d);
+              const date = new Date(parseDay(d.day));
+              return h(
+                'div',
+                {},
+                h(
+                  'button',
+                  { class: `pp-dh${st.sel === k ? ' on' : ''}`, 'aria-pressed': String(st.sel === k), 'data-k': `dh${k}`, onclick: () => ((st.sel = k), paint()) },
+                  h('span', { class: 'nm' }, date.toLocaleDateString('en-GB', { weekday: 'short' })),
+                  h('span', { class: 'dt num' }, date.getDate()),
+                  past ? h('span', { class: 'badge' }, 'Passed') : changes ? h('span', { class: 'badge dawn' }, `${changes} change${changes === 1 ? '' : 's'}`) : d.current ? h('span', { class: 'badge' }, 'No change') : h('span', { class: 'badge accent' }, 'New'),
+                ),
+                h('label', { class: 'pp-take' }, h('input', { type: 'checkbox', checked: taken(d), disabled: past, 'data-k': `take${k}`, onchange: flip(st.off, d.day) }), 'Take this day'),
+                h(
+                  'div',
+                  { class: 'pp-das' },
+                  d.aims.map((a, i) => h('div', { class: `pp-da${taken(d) && aimOn(d, a, i) ? '' : ' off'}` }, h('span', { class: `pp-n sm${a.aim ? '' : ' free'}` }, a.aim ?? ''), h('span', { dir: 'auto' }, a.text))),
+                ),
+              );
+            }),
+          ),
+          h(
+            'div',
+            { class: 'pp-row', style: cols },
+            h('div', { class: 'pp-axis', style: { height: `${height}px` }, 'aria-hidden': 'true' }, ticks.map((hr) => h('span', { class: 'num', style: { top: `${(hr - fromH) * PP_HOUR}px` } }, pad(hr % 24 === 0 && hr ? 24 : hr % 24)))),
+            p.days.map((d, k) =>
+              h(
+                'div',
+                { class: `pp-col${taken(d) ? '' : ' out'}${st.sel === k ? ' sel' : ''}`, style: { height: `${height}px` } },
+                d.job ? h('div', { class: 'pp-job', style: { top: `${y(d, d.job.start)}px`, height: `${(d.job.end - d.job.start) / 3_600_000 * PP_HOUR}px` } }, h('span', {}, 'Job')) : null,
+                d.blocks.map((b, i) => {
+                  const look = blockStyle(b.category);
+                  const on = blockKept(d, i);
+                  const tall = b.end - b.start >= 75 * 60000;
+                  return h(
+                    'button',
+                    {
+                      class: `pp-b ${look.cls}${on ? '' : ' off'}${b.was ? ' chg' : ''}`,
+                      style: { top: `${y(d, b.start) + 1}px`, height: `${Math.max(14, (b.end - b.start) / 3_600_000 * PP_HOUR - 2)}px`, ...(look.color ? { '--c': look.color } : {}) },
+                      title: `${b.label} · ${span(b.start, b.end)}${b.why ? `\n${b.why}` : ''}`,
+                      'aria-label': `${b.label}, ${span(b.start, b.end)}${on ? '' : ', left out'}`,
+                      onclick: () => ((st.sel = k), paint()),
+                    },
+                    h('span', { dir: 'auto' }, b.label),
+                    tall ? h('small', { class: 'num' }, span(b.start, b.end)) : null,
+                  );
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'legend pp-legend' },
+        h('span', {}, h('i', { class: 'pp-sw', style: { background: 'var(--cat-learning)' } }), 'Focus, in its colour'),
+        h('span', {}, h('i', { class: 'pp-sw lg' }), 'Away from the PC'),
+        h('span', {}, h('i', { class: 'pp-sw nt' }), 'No category'),
+        h('span', {}, h('i', { class: 'pp-sw job' }), 'Job hours'),
+        h('span', {}, h('i', { class: 'pp-dot' }), 'Moved from your current plan'),
+        h('span', {}, h('i', { class: 'pp-sw out' }), 'Left out'),
+      ),
+    );
+
+    const d = p.days[st.sel];
+    const dKept = d.blocks.filter((_, i) => blockKept(d, i));
+    const dMs = dKept.reduce((n, b) => n + b.end - b.start, 0);
+    const detail = h(
+      'section',
+      { class: 'card' },
+      h('header', {}, h('div', {}, h('h2', {}, longDate(d.day)), h('p', { class: 'pp-sub' }, !taken(d) ? (d.day < now ? 'This day has passed' : 'Left as it is: tick it to take it') : d.job ? `Job day · ${span(d.job.start, d.job.end)}` : 'Day off')), h('p', {}, taken(d) ? `${dKept.length} blocks · ${duration(dMs)}` : 'Not taken')),
+      d.aims.length
+        ? h(
+            'div',
+            { class: 'pp-dai-box' },
+            h('div', { class: 'overline' }, 'Aims for this day'),
+            d.aims.map((a, i) =>
+              h(
+                'label',
+                { class: `pp-dai${taken(d) && aimOn(d, a, i) ? '' : ' off'}` },
+                h('input', { type: 'checkbox', checked: aimOn(d, a, i), disabled: !taken(d) || Boolean(a.aim && st.dropWeek.has(a.aim)), 'data-k': `a${st.sel}-${i}`, onchange: flip(st.dropAims, `${d.day}#${i}`) }),
+                h('span', { class: 't', dir: 'auto' }, a.text),
+                a.aim ? h('span', { class: 'badge dusk' }, `Week aim ${a.aim}`) : null,
+              ),
+            ),
+            h('span', { class: 'pp-note' }, `They’re added to the day’s goals${d.goals ? ` (it has ${d.goals} already)` : ''}, and the evening log asks how each one went.`),
+          )
+        : null,
+      d.blocks.length
+        ? h(
+            'div',
+            {},
+            d.blocks.map((b, i) => {
+              const look = blockStyle(b.category);
+              const on = blockKept(d, i);
+              return h(
+                'div',
+                { class: `pp-brow${on ? '' : ' off'}` },
+                h('span', { class: 'when num' }, span(b.start, b.end), h('small', {}, duration(b.end - b.start))),
+                h(
+                  'span',
+                  { class: 'what' },
+                  h('span', { class: 'row', style: { gap: '8px' } }, h('i', { class: `pp-sw ${look.cls === 'fill' ? '' : look.cls}`, style: look.color ? { background: look.color } : {} }), h('b', { dir: 'auto' }, b.label), b.category ? h('span', { class: 'hint' }, planCategoryName(b.category)) : null),
+                  b.why ? h('span', { class: 'hint', dir: 'auto' }, b.why) : null,
+                  b.was ? h('span', { class: 'pp-was num' }, `Was ${b.was}`) : null,
+                ),
+                planSwitch(blockKept(d, i) || (!taken(d) && !st.dropBlocks.has(`${d.day}#${i}`)), flip(st.dropBlocks, `${d.day}#${i}`), `Keep ${b.label}`, `b${st.sel}-${i}`),
+              );
+            }),
+          )
+        : h('p', { class: 'empty' }, 'No blocks proposed for this day.'),
+      d.removed.length && taken(d)
+        ? h(
+            'div',
+            { class: 'pp-removed' },
+            h('div', { class: 'overline', style: { marginBottom: '6px' } }, 'Comes off your plan'),
+            d.removed.map((r) => h('div', { class: 'row' }, h('b', { class: 'num' }, span(r.start, r.end)), h('span', { dir: 'auto' }, r.label))),
+          )
+        : null,
+    );
+
+    const diff = card(
+      'Against what’s planned now',
+      null,
+      h('p', { class: 'hint', style: { marginBottom: '8px' } }, 'A day you take gets the proposed blocks in place of its current plan.'),
+      p.days.map((x) => {
+        const keptHere = x.blocks.filter((_, i) => blockKept(x, i));
+        const moved = x.blocks.filter((b, i) => b.was && blockKept(x, i)).map((b) => `${b.label} moves to ${span(b.start, b.end)}`);
+        const line = !taken(x)
+          ? 'Left as it is'
+          : x.current === 0
+            ? `Nothing planned yet: adds ${keptHere.length} block${keptHere.length === 1 ? '' : 's'}`
+            : `Replaces ${x.current} block${x.current === 1 ? '' : 's'} with ${keptHere.length}`;
+        const bits = taken(x) ? [...moved, ...x.removed.map((r) => `${r.label} comes off`)] : [];
+        return h(
+          'div',
+          { class: 'pp-drow' },
+          h('span', { class: 'd' }, new Date(parseDay(x.day)).toLocaleDateString('en-GB', { weekday: 'short' })),
+          h('span', { class: 'c' }, h('span', {}, line), bits.length ? h('span', { class: 'hint', dir: 'auto' }, bits.join(' · ')) : null),
+        );
+      }),
+    );
+
+    return [head, weekAims, h('div', { class: 'grid cols-2 pp-gap' }, why ?? h('div'), stats), grid, h('div', { class: 'grid cols-2 pp-gap' }, detail, diff)];
+  }
+
+  function paint() {
+    const key = document.activeElement?.dataset?.k;
+    root.replaceChildren(...build().flat(Infinity).filter(Boolean));
+    if (key) root.querySelector(`[data-k="${key}"]`)?.focus();
+  }
+  paint();
+  return root;
+}
+
+function proposalEmpty(history) {
+  const STATUS_WORD = { applied: 'Applied', discarded: 'Discarded', waiting: 'Waiting' };
+  const steps = [
+    ['Ask for next week', 'Ask Claude in chat to propose a plan. It reads your job hours, projects and the last few weeks.'],
+    ['Look it over here', 'Every block comes with a line on why it’s there. Untick a day or switch off a block or aim you don’t want.'],
+    ['Apply the days you take', 'They become the day’s plan and goals on Today and in the evening log. Days you leave out keep what they had.'],
+  ];
+  return [
+    h('div', { class: 'page-head' }, h('div', {}, h('div', { class: 'overline', style: { marginBottom: '6px' } }, 'Proposed plan'), h('h1', {}, 'Nothing waiting to look over'), h('p', {}, 'When a plan for your week is proposed, it lands here first'))),
+    h(
+      'div',
+      { class: 'grid cols-2' },
+      card(
+        'How a proposal reaches you',
+        null,
+        h('div', { class: 'pp-steps' }, steps.map(([t, s], i) => h('div', { class: 'pp-step' }, h('span', { class: 'pp-n' }, i + 1), h('div', {}, h('b', {}, t), h('div', { class: 'hint' }, s))))),
+        h('div', { class: 'row', style: { marginTop: '16px' } }, h('span', { class: 'badge dusk' }, 'Say in chat'), h('code', {}, 'Propose a plan for next week')),
+      ),
+      card(
+        'Earlier proposals',
+        null,
+        history.length
+          ? h(
+              'ul',
+              { class: 'list' },
+              history.map((x) =>
+                h(
+                  'li',
+                  { class: 'row' },
+                  h('b', { class: 'num grow' }, weekSpan(x.week)),
+                  h('span', { class: 'hint' }, x.status === 'applied' ? `Applied to ${x.taken} of ${x.days} days` : STATUS_WORD[x.status] ?? x.status),
+                  x.status === 'applied' ? h('a', { class: 'btn sm ghost', href: `#week/${x.week}` }, 'Open week') : null,
+                ),
+              ),
+            )
+          : h('p', { class: 'empty' }, 'None yet.'),
+      ),
+    ),
+  ];
+}
+
+/** The aims you took for a week, to mark as the week goes. */
+function weekAimsCard(week) {
+  if (!week.aims?.length) return null;
+  const call = async (path, options) => {
+    try {
+      await api(path, options);
+      await render();
+    } catch (error) {
+      handle(error);
+    }
+  };
+  const met = week.aims.filter((a) => a.result === 'met').length;
+  return h(
+    'div',
+    { class: 'grid', style: { marginBottom: '16px' } },
+    card(
+      'Aims for the week',
+      `${met} of ${week.aims.length} met`,
+      h(
+        'ul',
+        { class: 'list' },
+        week.aims.map((a, i) =>
+          h(
+            'li',
+            { class: 'goal' },
+            h('span', { class: 'pp-n' }, i + 1),
+            h('span', { class: 'grow' }, h('span', { dir: 'auto' }, a.text), a.how ? h('span', { class: 'hint', dir: 'auto', style: { display: 'block' } }, a.how) : null),
+            h(
+              'span',
+              { class: 'seg', role: 'group', 'aria-label': `How it went: ${a.text}` },
+              RESULTS.map(([value, label]) =>
+                h('button', { type: 'button', class: a.result === value ? `on ${value}` : '', 'aria-pressed': String(a.result === value), onclick: () => call(`/week-aims/${a.id}`, { method: 'PATCH', body: { result: a.result === value ? null : value } }) }, label),
+              ),
+            ),
+            h('button', { class: 'icon-btn', title: 'Remove aim', 'aria-label': `Remove ${a.text}`, onclick: () => call(`/week-aims/${a.id}`, { method: 'DELETE' }) }, '×'),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/** A small count on the rail while a proposal waits. */
+function proposalBadge() {
+  const link = document.querySelector('.nav[data-page="proposed"]');
+  if (!link) return;
+  api('/proposals')
+    .then((data) => {
+      link.querySelector('.nav-badge')?.remove();
+      if (data.waiting) link.append(h('i', { class: 'nav-badge', 'aria-label': 'One waiting' }, '1'));
+    })
+    .catch(() => {});
+}
+
 // ------------------------------------------------------------------ router
 
 function closeOr(hash) {
@@ -4550,8 +4997,8 @@ function showSignedOut() {
   );
 }
 
-const PAGES = { today: todayPage, morning: morningPage, evening: eveningPage, back: backPage, week: weekPage, projects: projectsPage, health: healthPage, exercise: exercisePage, reminders: remindersPage, settings: settingsPage };
-const TITLES = { today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', projects: 'Projects', health: 'Health', exercise: 'Exercise', reminders: 'Reminders', settings: 'Settings' };
+const PAGES = { today: todayPage, morning: morningPage, evening: eveningPage, back: backPage, week: weekPage, proposed: proposedPage, projects: projectsPage, health: healthPage, exercise: exercisePage, reminders: remindersPage, settings: settingsPage };
+const TITLES = { today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', proposed: 'Proposed plan', projects: 'Projects', health: 'Health', exercise: 'Exercise', reminders: 'Reminders', settings: 'Settings' };
 let rendering = 0;
 
 // The demo profile (raqib demo) shows only the tabs chosen for it; null otherwise.
@@ -4577,6 +5024,7 @@ async function render() {
     if (ticket !== rendering) return;
     main.replaceChildren(...[content].flat(Infinity).filter((node) => node !== null && node !== undefined && node !== false));
     window.scrollTo(0, scroll);
+    if (view !== 'today') proposalBadge();
   } catch (error) {
     if (ticket !== rendering) return;
     if (error instanceof SignedOut) showSignedOut();
