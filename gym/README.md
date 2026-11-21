@@ -49,6 +49,13 @@ npm run check-parity                             # the cloud's suggestions match
   `push-from-pc` sends the PC's plan up only the first time (as "Main plan"); after that the
   phone owns plans (`-- --replace-plan` overwrites them with the PC's).
 - `convex/training.ts`: today, log a set, remove a set, rest length, finish, summary, past.
+- Supersets (`supersets` table; a plan exercise's `supersetNum` and `supersetOrder`): two or
+  more lifts on a day done in rounds, a set of A1, a set of A2, then one rest (each superset
+  has its own). Sets are still logged to each exercise, so history and progress stay per
+  lift. `convex/lib/supersets.ts` letters and orders them; `src/supersetFlow.ts` says whose
+  turn it is. Made and edited in the plan editor (*Superset with next*, *Leave superset*).
+- `convex/migrations.ts`: one-off data changes, run by hand (`npx convex run migrations:<name>`,
+  add `--prod` for the deployed one). `calvesV1` is the calf day of `tracker/src/calfWork.ts`.
 - `convex/strength.ts`: the strength score and strength balance (#/strength), from the
   shared `../tracker/src/strength.ts`. Each muscle group's best lift in 90 days, as a 1RM
   on its reference lift for your bodyweight, scored 100 points per level (Beginner …

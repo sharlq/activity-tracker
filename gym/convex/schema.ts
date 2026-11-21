@@ -70,6 +70,21 @@ export const planExerciseFields = {
   /** Rest between sets, in seconds: the timer's length. */
   restSeconds: v.number(),
   goals: v.array(v.object({ day: v.string(), weight: v.number() })),
+  /** The superset it's in (a `supersets` row's num); missing for a lift done on its own. */
+  supersetNum: v.optional(v.number()),
+  /** Its place in that superset, from 1 (A1, A2, …). */
+  supersetOrder: v.optional(v.number()),
+};
+
+/**
+ * Lifts done in rounds: a set of each member in order, then one rest. Members point here
+ * with supersetNum; a superset with fewer than two active members counts as none.
+ */
+export const supersetFields = {
+  num: v.number(),
+  dayNum: v.number(),
+  /** Rest after each round, in seconds (the members' own rest is for when they're done alone). */
+  restSeconds: v.number(),
 };
 
 export default defineSchema({
@@ -77,6 +92,7 @@ export default defineSchema({
   plans: defineTable({ num: v.number(), name: v.string(), note: nullable(v.string()), active: v.boolean(), createdAt: v.number() }).index('by_num', ['num']),
   planDays: defineTable({ num: v.number(), planNum: v.number(), name: v.string(), position: v.number(), note: nullable(v.string()) }).index('by_num', ['num']).index('by_plan', ['planNum']),
   planExercises: defineTable(planExerciseFields).index('by_num', ['num']),
+  supersets: defineTable(supersetFields).index('by_num', ['num']).index('by_day', ['dayNum']),
   workouts: defineTable(workoutFields).index('by_num', ['num']).index('by_day', ['day']).index('by_updated', ['updatedAt']),
   checkpoints: defineTable({ day: v.string(), label: v.string() }).index('by_day', ['day']),
   bodyGoals: defineTable({ day: v.string(), weight: v.number(), lean: nullable(v.number()) }).index('by_day', ['day']),

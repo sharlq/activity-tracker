@@ -188,6 +188,7 @@ function check(label: string, on: boolean, hint: string): [HTMLElement, HTMLInpu
 }
 
 function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean): HTMLElement {
+  const ss = e.superset;
   const { client, key } = ctx;
   const name = h('input', { class: 'field', type: 'text', dir: 'auto', value: e.name, list: 'exercise-names', 'aria-label': 'Exercise name', maxlength: 200 }) as HTMLInputElement;
   const [setsF, sets] = numberField('Sets', e.sets, { min: 1, max: 10, step: 1, inputmode: 'numeric' });
@@ -231,6 +232,15 @@ function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean):
     h(
       'div',
       { class: 'row' },
+      ss
+        ? h('span', { class: 'muted small grow' }, h('span', { class: 'ss-line' }, `Superset ${ss.label}${ss.order}`), ' · its sets alternate with the others, then rest')
+        : h('span', { class: 'muted small grow' }, 'Done on its own'),
+      ss ? h('button', { class: 'btn small', onclick: () => void attempt(() => client.mutation(api.plans.leaveSuperset, { key, exerciseNum: e.num }), `${e.name} is done on its own now`) }, 'Leave superset') : null,
+      isLast && !ss ? null : h('button', { class: 'btn small', onclick: () => void attempt(() => client.mutation(api.plans.supersetWithNext, { key, exerciseNum: e.num }), 'Superset made') }, ss ? 'Add the next lift' : 'Superset with next'),
+    ),
+    h(
+      'div',
+      { class: 'row' },
       h('button', { class: 'btn primary', onclick: () => void save() }, 'Save'),
       h('button', { class: 'btn', onclick: () => ((editing = null), ctx.rerender()) }, 'Cancel'),
       h('span', { class: 'grow' }),
@@ -244,15 +254,29 @@ function exerciseForm(e: Exercise, ctx: Ctx, isFirst: boolean, isLast: boolean):
 function exerciseRow(e: Exercise, ctx: Ctx, i: number, count: number): HTMLElement {
   if (editing === e.num) return h('li', { class: 'ex-row open' }, exerciseForm(e, ctx, i === 0, i === count - 1));
   const extra = [e.bodyweight ? 'bodyweight' : null, e.perHand ? 'per hand' : null, e.perSide ? 'per side' : null].filter(Boolean).join(' · ');
+  const tag = e.superset ? `${e.superset.label}${e.superset.order}` : null;
   return h(
     'li',
-    { class: 'ex-row' },
+    { class: `ex-row${tag ? ' in-superset' : ''}` },
     h(
       'button',
       { class: 'ex-line', onclick: () => ((editing = e.num), ctx.rerender()) },
-      h('span', { class: 'grow' }, h('span', { class: 'ex-name', dir: 'auto' }, e.name), h('span', { class: 'muted small block' }, `${e.sets} × ${e.repMin}–${e.repMax} · rest ${mmss(e.restSeconds)}${extra ? ` · ${extra}` : ''}`)),
+      tag ? h('span', { class: 'ss-tag' }, tag) : null,
+      h('span', { class: 'grow' }, h('span', { class: 'ex-name', dir: 'auto' }, e.name), h('span', { class: 'muted small block' }, `${e.sets} × ${e.repMin}–${e.repMax} · ${e.superset ? 'rest after the round' : `rest ${mmss(e.restSeconds)}`}${extra ? ` · ${extra}` : ''}`)),
       h('span', { class: 'muted', 'aria-hidden': 'true' }, '›'),
     ),
+  );
+}
+
+/** A superset's heading in the day: its letter and the rest after each round. */
+function supersetRow(ss: NonNullable<Exercise['superset']>, ctx: Ctx): HTMLElement {
+  const rest = restSelect(ss.restSeconds, `Rest after each round of superset ${ss.label}`);
+  rest.addEventListener('change', () => void attempt(() => ctx.client.mutation(api.plans.updateSuperset, { key: ctx.key, supersetNum: ss.num, restSeconds: Number(rest.value) }), `Superset ${ss.label}: rest ${mmss(Number(rest.value))} per round`));
+  return h(
+    'li',
+    { class: 'ss-row' },
+    h('span', { class: 'ss-badge grow' }, `Superset ${ss.label}`, h('span', { class: 'muted small block' }, `${ss.size} lifts: a set of each, then rest`)),
+    h('label', { class: 'form-field' }, h('span', { class: 'step-label' }, 'Rest per round'), rest),
   );
 }
 
@@ -286,7 +310,9 @@ function daySection(d: Day, ctx: Ctx, i: number, count: number): HTMLElement {
       h('button', { class: 'btn ghost small', disabled: i === count - 1, 'aria-label': `Move ${d.name} later`, onclick: () => void attempt(() => client.mutation(api.plans.moveDay, { key, dayNum: d.num, by: 1 })) }, '↓'),
       h('button', { class: 'btn ghost small', 'aria-label': `Remove ${d.name}`, onclick: removeDay }, '✕'),
     ),
-    d.exercises.length ? h('ol', { class: 'ex-rows' }, ...d.exercises.map((e, j) => exerciseRow(e, ctx, j, d.exercises.length))) : h('p', { class: 'muted small' }, 'No exercises yet.'),
+    d.exercises.length
+      ? h('ol', { class: 'ex-rows' }, ...d.exercises.flatMap((e, j) => [...(e.superset?.order === 1 ? [supersetRow(e.superset, ctx)] : []), exerciseRow(e, ctx, j, d.exercises.length)]))
+      : h('p', { class: 'muted small' }, 'No exercises yet.'),
     h('div', { class: 'row' }, add, h('button', { class: 'btn', onclick: () => void addIt() }, 'Add')),
   );
 }

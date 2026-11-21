@@ -11,6 +11,8 @@ import type { PlanList } from './plans.ts';
 import { planEditor, plansScreen, planSummary } from './plans.ts';
 import type { StrengthResult } from './strength.ts';
 import { bodyweightChoice, standardsChoice, strengthScreen } from './strength.ts';
+import { canFloat, floating, toggleFloat } from './float.ts';
+import { afterSupersetSet as afterSet, groupOf, nextUp as firstUp, tagOf } from './supersetFlow.ts';
 import { addRest, canKeepAwake, keepingAwake, mmss, onRest, remaining, restNow, setKeepAwake, startRest, stopRest, unlockSound } from './timer.ts';
 import { attempt, h, message, n1, store, thousands, toast } from './ui.ts';
 
@@ -191,6 +193,10 @@ function done(e: Exercise): number {
   return e.logged.length + pending.filter((p) => p.exercise === e.num).length;
 }
 
+// Supersets go in rounds (supersetFlow.ts); these count pending sets as done.
+const nextUp = (all: Exercise[]) => firstUp(all, done);
+const afterSupersetSet = (e: Exercise, all: Exercise[]) => afterSet(e, all, done);
+
 /**
  * Today's reps to aim for, set by set, at the suggested weight. "Same weight: beat your reps"
  * becomes one more than last time on each set; a set already at or past the top of the range
@@ -286,11 +292,21 @@ async function logSet(e: Exercise, all: Exercise[]): Promise<void> {
   // The weight carries on (it's the last set's now); reps start again from the next set's aim.
   inputs.delete(e.num);
   const n = done(e);
-  // Rest starts now; the last set of an exercise moves on to the next one.
-  const next = n >= e.sets ? all.find((x) => x.num !== e.num && done(x) < x.sets) : undefined;
-  if (n >= e.sets && next) open = next.num;
-  if (n < e.sets || next) startRest(e.restSeconds, n >= e.sets ? `Next: ${next!.name}` : `Set ${n + 1} of ${e.sets} next`);
-  else stopRest();
+  if (e.superset) {
+    // A superset: straight on to the next member, and rest once the round is done.
+    const { next, rest } = afterSupersetSet(e, all);
+    if (next) open = next.num;
+    if (!rest) stopRest();
+    else if (next?.superset?.num === e.superset.num) startRest(e.superset.restSeconds, `Round ${done(next) + 1} next: ${tagOf(next)} ${next.name}`);
+    else if (next) startRest(e.superset.restSeconds, `Next: ${next.name}`);
+    else stopRest();
+  } else {
+    // Rest starts now; the last set of an exercise moves on to the next one.
+    const next = n >= e.sets ? nextUp(all.filter((x) => x.num !== e.num)) : undefined;
+    if (n >= e.sets && next) open = next.num;
+    if (n < e.sets || next) startRest(e.restSeconds, n >= e.sets ? `Next: ${next!.name}` : `Set ${n + 1} of ${e.sets} next`);
+    else stopRest();
+  }
   render();
   const settle = () => {
     const i = pending.findIndex((p) => p.id === id);
@@ -364,6 +380,49 @@ function restPicker(e: Exercise): HTMLElement {
   return select;
 }
 
+/** A superset's rest after each round, from now on. */
+function supersetRestPicker(e: Exercise): HTMLElement {
+  const ss = e.superset!;
+  const select = h(
+    'select',
+    { class: 'rest-pick', 'aria-label': `Rest after each round of superset ${ss.label}` },
+    ...[...new Set([...REST_CHOICES, ss.restSeconds])].sort((a, b) => a - b).map((s) => h('option', { value: s, ...(s === ss.restSeconds ? { selected: true } : {}) }, `Rest ${mmss(s)} per round`)),
+  ) as HTMLSelectElement;
+  select.addEventListener('change', () => void attempt(() => client!.mutation(api.plans.updateSuperset, { key: key!, supersetNum: ss.num, restSeconds: Number(select.value) }), `Superset ${ss.label}: rest ${mmss(Number(select.value))} after each round`));
+  return select;
+}
+
+/** The superset's members side by side under one label, its rest after each round. */
+function supersetBlock(members: Exercise[], all: Exercise[], workoutNum: number | null): HTMLElement {
+  const first = members[0]!;
+  const ss = first.superset!;
+  const rounds = Math.max(...members.map((m) => m.sets));
+  const round = Math.min(rounds, Math.min(...members.filter((m) => done(m) < m.sets).map(done).concat(rounds)) + 1);
+  const finished = members.every((m) => done(m) >= m.sets);
+  return h(
+    'section',
+    { class: `superset${finished ? ' complete' : ''}`, 'aria-label': `Superset ${ss.label}` },
+    h(
+      'div',
+      { class: 'ss-head' },
+      h('span', { class: 'ss-badge' }, `Superset ${ss.label}`),
+      h('span', { class: 'muted small grow' }, finished ? `${rounds} rounds done` : `Round ${round} of ${rounds} · a set of each, then rest`),
+      supersetRestPicker(first),
+    ),
+    ...members.map((m) => exerciseCard(m, all, workoutNum)),
+  );
+}
+
+/** The day's cards, a superset's members together in one block. */
+function exerciseList(all: Exercise[], workoutNum: number | null): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const e of all) {
+    if (!e.superset) out.push(exerciseCard(e, all, workoutNum));
+    else if (e.superset.order === 1 || !all.some((x) => x.superset?.num === e.superset!.num && x.superset.order < e.superset!.order)) out.push(supersetBlock(groupOf(e, all), all, workoutNum));
+  }
+  return out;
+}
+
 /** The plan's number of sets for this exercise, from now on (the engine judges that many). */
 function plannedSets(e: Exercise): HTMLElement {
   const change = (by: number) => () => {
@@ -428,6 +487,7 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
     'button',
     { class: 'ex-head', onclick: () => ((open = isOpen ? null : e.num), (editing = null), render()), 'aria-expanded': String(isOpen) },
     h('span', { class: `ex-dot${complete ? ' done' : count ? ' some' : ''}`, 'aria-hidden': 'true' }, complete ? '✓' : ''),
+    tagOf(e) ? h('span', { class: 'ss-tag', 'aria-label': `Superset ${tagOf(e)}` }, tagOf(e)) : null,
     h('span', { class: 'ex-name', dir: 'auto' }, e.name),
     h('span', { class: 'ex-meta' }, `${count}/${e.sets}`, h('span', { class: 'ex-weight' }, wLabel(e.suggested, e))),
   );
@@ -507,7 +567,14 @@ function exerciseCard(e: Exercise, all: Exercise[], workoutNum: number | null): 
     h(
       'div',
       { class: 'ex-body' },
-      h('div', { class: 'ex-plan' }, h('span', null, `${e.sets} × ${e.repMin}–${e.repMax}`), progress ? h('span', { class: `badge ${progress[1]}` }, progress[0]) : null, restPicker(e)),
+      h(
+        'div',
+        { class: 'ex-plan' },
+        h('span', null, `${e.sets} × ${e.repMin}–${e.repMax}`),
+        progress ? h('span', { class: `badge ${progress[1]}` }, progress[0]) : null,
+        // A superset member rests after the round (set on the superset), not after its own sets.
+        e.superset ? h('span', { class: 'muted small' }, `Rest after round ${mmss(e.superset.restSeconds)}`) : restPicker(e),
+      ),
       e.last
         ? h('p', { class: 'muted small' }, `Last ${shortDay(e.last.day)}: ${wLabel(e.last.weight, e)} × ${e.last.reps.join('/')}`, e.lastVerdict ? `. ${e.lastVerdict}` : '')
         : h('p', { class: 'muted small' }, 'First time on the plan'),
@@ -573,7 +640,7 @@ function dock(t: Today, e: Exercise): HTMLElement {
   return h(
     'div',
     { class: 'dock', id: 'dock' },
-    h('div', { class: 'dock-head' }, h('span', { dir: 'auto' }, `${count >= e.sets ? `Extra set ${count + 1}` : `Set ${count + 1} of ${e.sets}`} · ${e.name}`), sinceLastSet(t)),
+    h('div', { class: 'dock-head' }, h('span', { dir: 'auto' }, `${tagOf(e) ? `${tagOf(e)} · ` : ''}${count >= e.sets ? `Extra set ${count + 1}` : `Set ${count + 1} of ${e.sets}`} · ${e.name}`), sinceLastSet(t)),
     h('div', { class: 'inputs' }, stepper(weightField(e), weight, e.step, e.bodyweight ? -200 : 0, (v) => set({ weight: v }), true), stepper('Reps', reps, 1, 0, (v) => set({ reps: v }), false)),
     h('button', { class: 'btn primary big', id: 'log-btn', onclick: () => void logSet(e, t.exercises) }, logText(e)),
   );
@@ -648,7 +715,7 @@ function todayScreen(): HTMLElement[] {
     return [h('main', { class: 'pad center stack' }, h('p', { class: 'eyebrow' }, today.plan.name), h('h1', null, 'This plan has no days yet'), h('a', { class: 'btn primary big', href: `#/plans/${today.plan.num}` }, 'Add days and exercises'))];
   }
   const t = today;
-  if (open === null || !t.exercises.some((e) => e.num === open)) open = (t.exercises.find((e) => done(e) < e.sets) ?? t.exercises[0])?.num ?? null;
+  if (open === null || !t.exercises.some((e) => e.num === open)) open = (nextUp(t.exercises) ?? t.exercises[0])?.num ?? null;
   // A set being fixed that's gone (removed on the PC, say) closes the editor.
   if (editing && !t.exercises.some((e) => e.logged.some((s) => s.id === editing!.setId))) editing = null;
   const current = t.exercises.find((e) => e.num === open);
@@ -697,7 +764,7 @@ function todayScreen(): HTMLElement[] {
       t.started !== null && t.started !== t.day.id ? h('p', { class: 'note' }, 'You already started another plan day today. Sets here go into a separate workout.') : null,
       t.day.note ? h('p', { class: 'muted small', dir: 'auto' }, t.day.note) : null,
     ),
-    h('main', { class: 'list' }, ...t.exercises.map((e) => exerciseCard(e, t.exercises, workout?.num ?? null))),
+    h('main', { class: 'list' }, ...exerciseList(t.exercises, workout?.num ?? null)),
     h(
       'footer',
       { class: 'finish' },
@@ -806,30 +873,55 @@ function renderHistory(list: Recent): void {
 // ------------------------------------------------------------------ the timer bar
 
 const bar = document.getElementById('timer') as HTMLElement;
+// Built once per state (running, over, floating) and then only its numbers change, so a
+// tap never lands on a button that was swapped out under the finger.
+let barKey = '';
 function renderTimer(): void {
   const r = restNow();
   bar.hidden = !r;
   document.body.classList.toggle('resting', !!r);
-  if (!r) return;
+  if (!r) return void (barKey = '');
   const left = remaining();
   const over = left === 0;
   // Past the end it counts on, so the clock since the last set needs no second display.
   const late = over ? Math.max(0, Math.floor((Date.now() - r.endsAt) / 1000)) : 0;
-  bar.className = over ? 'over' : '';
-  bar.replaceChildren(
-    h('div', { class: 'timer-fill', style: `width:${over ? 100 : ((r.total - left) / r.total) * 100}%` }),
-    h(
-      'div',
-      { class: 'timer-row' },
-      h('button', { class: 'btn timer-btn', onclick: () => addRest(-30), 'aria-label': '30 seconds less' }, '−30'),
-      h('div', { class: 'timer-mid', role: 'timer', 'aria-live': over ? 'assertive' : 'off' }, h('strong', { class: 'timer-time' }, over ? `+${mmss(late)}` : mmss(left)), h('span', { class: 'timer-label' }, over ? `Rest over · ${r.label}` : r.label)),
-      h('button', { class: 'btn timer-btn', onclick: () => addRest(30), 'aria-label': '30 seconds more' }, '+30'),
-      h('button', { class: 'btn timer-btn', onclick: () => stopRest(), 'aria-label': over ? 'Dismiss the timer' : 'Skip rest' }, over ? 'Done' : 'Skip'),
-    ),
-  );
+  const out = floating();
+  const key = `${over}|${out}`;
+  if (key !== barKey) {
+    barKey = key;
+    bar.className = over ? 'over' : '';
+    bar.replaceChildren(
+      h('div', { class: 'timer-fill' }),
+      h(
+        'div',
+        { class: 'timer-row' },
+        h('button', { class: 'btn timer-btn', onclick: () => addRest(-30), 'aria-label': '30 seconds less' }, '−30'),
+        h('div', { class: 'timer-mid', role: 'timer', 'aria-live': over ? 'assertive' : 'off' }, h('strong', { class: 'timer-time' }), h('span', { class: 'timer-label' })),
+        h('button', { class: 'btn timer-btn', onclick: () => addRest(30), 'aria-label': '30 seconds more' }, '+30'),
+        h('button', { class: 'btn timer-btn', onclick: () => stopRest(), 'aria-label': over ? 'Dismiss the timer' : 'Skip rest' }, over ? 'Done' : 'Skip'),
+        canFloat()
+          ? h('button', { class: `btn timer-btn timer-float${out ? ' on' : ''}`, onclick: () => void floatTimer(), 'aria-label': out ? 'Bring the timer back into the app' : 'Float the timer over other apps', 'aria-pressed': String(out), title: 'Float over other apps' }, '⧉')
+          : null,
+      ),
+    );
+  }
+  (bar.querySelector('.timer-fill') as HTMLElement).style.width = `${over ? 100 : ((r.total - left) / r.total) * 100}%`;
+  const time = bar.querySelector('.timer-time') as HTMLElement;
+  const label = bar.querySelector('.timer-label') as HTMLElement;
+  const t = over ? `+${mmss(late)}` : mmss(left);
+  const l = over ? `Rest over · ${r.label}` : r.label;
+  if (time.textContent !== t) time.textContent = t;
+  if (label.textContent !== l) label.textContent = l;
 }
 onRest(renderTimer);
 renderTimer();
+
+async function floatTimer(): Promise<void> {
+  const wasOut = floating();
+  if (!(await toggleFloat())) toast('This browser can’t float the timer', true);
+  else if (!wasOut) toast('Timer floating — switch apps and it stays on screen');
+  renderTimer();
+}
 
 // ------------------------------------------------------------------ start
 
