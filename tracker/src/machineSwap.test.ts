@@ -38,6 +38,7 @@ test('machineFor: any spelling of an old lift; per side in labels', () => {
   assert.equal(machineFor(' dumbbell bench press')?.name, 'Iso-Lateral Flat Chest Press (Machine)');
   assert.equal(machineFor('Cable Seated Incline Fly')?.name, 'Incline Chest Fly (Plate-Loaded)');
   assert.equal(machineFor('Dumbbell Shoulder Press'), null);
+  assert.equal(machineFor('bodyweight single-leg hip thrust')?.name, 'Iso-Lateral Hip Thrust (Machine)');
   assert.equal(weightLabel(40, { perSide: true }), '40 kg per side');
 });
 

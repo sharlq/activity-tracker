@@ -6,7 +6,7 @@ import { checkSyncKey } from './access';
 import { nextNum } from './lib/nums';
 import { loadPlanView } from './lib/planView';
 import { planExerciseFields, workoutFields } from './schema';
-import { MACHINE_SWAPS, machineFor } from '../../tracker/src/machineSwap.ts';
+import { MACHINE_SWAPS, machineFor, swappedNames } from '../../tracker/src/machineSwap.ts';
 
 const nullable = <T extends Parameters<typeof v.union>[0]>(t: T) => v.union(t, v.null());
 
@@ -212,8 +212,10 @@ export const swapToMachines = mutation({
     for (const d of [...days].sort((a, b) => a.planNum - b.planNum || a.position - b.position)) {
       const plan = plans.find((p) => p.num === d.planNum);
       const mine = exercises.filter((e) => e.dayNum === d.num && e.active);
-      for (const { replaces, exercise: m } of MACHINE_SWAPS) {
-        const names = new Set(replaces.map((r) => r.toLowerCase()));
+      for (const swap of MACHINE_SWAPS) {
+        const m = swap.exercise;
+        // A plan made on the phone may have the old app's stand-in for the machine instead.
+        const names = new Set(swappedNames(swap).map((r) => r.toLowerCase()));
         const old = mine.filter((e) => names.has(e.name.toLowerCase())).sort((a, b) => a.position - b.position);
         if (!old.length) continue;
         const position = (old[0] as (typeof old)[number]).position;
@@ -224,7 +226,7 @@ export const swapToMachines = mutation({
         if (!already) {
           await ctx.db.insert('planExercises', {
             num: await nextNum(ctx), dayNum: d.num, position, name: m.name, aliases: [], sets: m.sets, repMin: m.repMin, repMax: m.repMax, step: m.step,
-            laterSlot: m.laterSlot, perHand: false, perSide: m.perSide, bodyweight: false, note: m.note, active: true, restSeconds: m.restSeconds, goals: goalsOf(m),
+            laterSlot: position > 1 && m.laterSlot, perHand: false, perSide: m.perSide, bodyweight: false, note: m.note, active: true, restSeconds: m.restSeconds, goals: goalsOf(m),
           });
         }
       }
