@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#fffdf8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#19201e" media="(prefers-color-scheme: dark)" />
     <title>رقيب</title>
     <link rel="icon" href="/ui/icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/ui/style.css" />
@@ -34,6 +36,14 @@
       <main id="main" tabindex="-1">
         <p class="loading">Loading…</p>
       </main>
+      <!-- On a phone the rail becomes this bar; the other sections sit under More. -->
+      <nav class="tabbar" aria-label="Sections">
+        <a class="tab" href="#today" data-tab="today" data-icon="today"><span>Today</span></a>
+        <a class="tab" href="#morning" data-tab="morning" data-icon="morning"><span>Morning</span></a>
+        <a class="tab" href="#evening" data-tab="evening" data-icon="evening"><span>Evening</span></a>
+        <a class="tab" href="#week" data-tab="week" data-icon="reports"><span>Week</span></a>
+        <a class="tab" href="#more" data-tab="more" data-icon="more"><span>More</span></a>
+      </nav>
     </div>
     <div id="snackbar" role="status" aria-live="polite"></div>
   </body>

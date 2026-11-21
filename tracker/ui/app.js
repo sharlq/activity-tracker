@@ -106,6 +106,7 @@ const ICONS = {
   phone: '<rect x="7" y="3.5" width="10" height="17" rx="2.5"/><path d="M11 17.5h2"/>',
   music: '<path d="M9 18V6.5l10-2v11.5"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
   plan: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4M8 14h3M8 17h6"/>',
+  more: '<circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/>',
 };
 function icon(name, cls = 'ic') {
   const box = document.createElement('span');
@@ -247,6 +248,16 @@ function moveTip(event) {
 }
 function hideTip() {
   tip?.classList.remove('show');
+  tipFor = null;
+}
+/** Phones and tablets: no hover, so a tap shows the tooltip and a second tap acts. */
+const touchOnly = matchMedia('(hover: none)').matches;
+let tipFor = null;
+if (touchOnly) {
+  document.addEventListener('click', (e) => {
+    if (tipFor && !e.target.closest?.('.tl-lanes')) hideTip();
+  });
+  window.addEventListener('scroll', () => tipFor && hideTip(), { passive: true });
 }
 
 function tickStep(spanMs) {
@@ -276,8 +287,9 @@ function timelineCard(day) {
       lane: 'you', start: g.start, end: g.end, gap: g, cls: 'gap', label: 'Not logged',
       info: { kind: 'Away', swatch: h('i', { class: 'dot dot-gap' }), heading: 'Not logged yet', lines: [g.kind === 'idle' ? `PC on but untouched${g.onScreen ? ` (${g.onScreen} on screen)` : ''}` : 'PC off, asleep, or locked'], when: [span(g.start, g.end), duration(g.ms)], hint: 'Click to log it' },
     })),
+    // Phone use runs alongside everything else, so it gets its own lane under "Logged".
     ...report.entries.map((e) => ({
-      lane: 'you', start: e.start, end: e.end, cls: 'logged', label: e.label,
+      lane: e.phone ? 'phone' : 'you', start: e.start, end: e.end, cls: 'logged', label: e.label,
       info: { kind: `Logged${e.category ? ` · ${e.category}` : ''}`, swatch: h('i', { class: 'dot logged' }), heading: e.label, lines: [], when: when(e.start, e.end), hint: 'Logged by you · click to zoom in' },
     })),
     ...day.planComparison.blocks.map((o) => ({
@@ -339,6 +351,11 @@ function timelineCard(day) {
               onmouseleave: hideTip,
               onclick: (e) => {
                 if (e.detail > 1) return;
+                if (touchOnly && tipFor !== item) {
+                  showTip(e, { ...item.info, hint: item.gap ? 'Tap again to log it' : 'Tap again to zoom in' });
+                  tipFor = item;
+                  return;
+                }
                 hideTip();
                 if (item.gap) {
                   const target = document.querySelector(`[data-gap="${item.gap.start}"]`);
@@ -372,6 +389,7 @@ function timelineCard(day) {
       h('span', { class: 'lane-name' }, 'On screen'), h('div', { class: 'lane' }, band(), lane('screen'), now),
       h('span', { class: 'lane-name' }, 'Playing'), h('div', { class: 'lane thin' }, band(), lane('sound'), now?.cloneNode()),
       h('span', { class: 'lane-name' }, 'Logged'), h('div', { class: 'lane' }, band(), lane('you'), now?.cloneNode()),
+      ...(report.entries.some((e) => e.phone) ? [h('span', { class: 'lane-name' }, 'Phone'), h('div', { class: 'lane phone-lane' }, band(), lane('phone'), now?.cloneNode())] : []),
       selection,
     );
 
@@ -385,7 +403,7 @@ function timelineCard(day) {
     }
     axis.replaceChildren(...ticks);
     const zoomed = view.from !== full.from || view.to !== full.to;
-    range.textContent = zoomed ? `Showing ${span(view.from, view.to)} (${duration(total)})` : 'Whole day · scroll to zoom, or drag across the bars';
+    range.textContent = zoomed ? `Showing ${span(view.from, view.to)} (${duration(total)})` : touchOnly ? 'Whole day · tap a bar to see what it was' : 'Whole day · scroll to zoom, or drag across the bars';
     for (const b of controls.querySelectorAll('[data-zoomed]')) b.disabled = !zoomed;
   }
 
@@ -2306,7 +2324,7 @@ async function remindersPage() {
 }
 
 async function settingsPage() {
-  const s = await api('/settings');
+  const [s, phone] = await Promise.all([api('/settings'), phoneCard()]);
   const save = async (change, message = 'Saved') => {
     try {
       await api('/settings', { method: 'PUT', body: change });
@@ -2326,11 +2344,12 @@ async function settingsPage() {
       'section',
       { class: 'privacy' },
       h('span', { class: 'ic-box' }, icon('shield')),
-      h('div', {}, h('h2', {}, 'Everything stays on this PC.'), h('p', {}, 'رقيب has no account and no server. Your day is kept in its own folder on this computer, and nothing is sent anywhere.')),
+      h('div', {}, h('h2', {}, 'Everything stays on this PC.'), h('p', {}, 'رقيب has no account and no server. Your day is kept in its own folder on this computer, and nothing is sent anywhere', onPhone ? '; this phone only shows what the PC keeps.' : '.')),
     ),
     h(
       'div',
       { class: 'stack' },
+      phone,
       card(
         'Morning page',
         null,
@@ -5009,6 +5028,167 @@ function proposalBadge() {
     .catch(() => {});
 }
 
+// ------------------------------------------------------------------ phone
+
+/** The window was opened from a phone (phone.ts), not on the PC. */
+const onPhone = !['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname) && !location.hostname.endsWith('.localhost');
+
+const MORE_NOTES = {
+  proposed: 'A plan waiting for a look',
+  projects: 'The longer things, step by step',
+  health: 'Food, weight and training',
+  reminders: 'Nudges through the day',
+  settings: onPhone ? 'Times, job hours' : 'Times, job hours, your phone',
+};
+
+/** #more: on a phone, the sections that don't fit in the bottom bar. */
+async function morePage() {
+  setTopnav(null);
+  const links = [...document.querySelectorAll('.sidebar .nav[data-page]')].filter((link) => !link.hidden && !['today', 'morning', 'evening', 'week'].includes(link.dataset.page));
+  let waiting = 0;
+  try {
+    waiting = (await api('/proposals')).waiting.length;
+  } catch (error) {
+    if (error instanceof SignedOut) throw error;
+  }
+  return [
+    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'More'))),
+    h(
+      'nav',
+      { class: 'card more-list', 'aria-label': 'More sections' },
+      links.map((link) =>
+        h(
+          'a',
+          { class: 'more-item', href: `#${link.dataset.page}` },
+          h('span', { class: 'ic-box' }, icon(link.dataset.icon)),
+          h('span', { class: 'grow' }, h('strong', {}, TITLES[link.dataset.page]), h('small', {}, MORE_NOTES[link.dataset.page] ?? '')),
+          link.dataset.page === 'proposed' && waiting ? h('span', { class: 'badge dawn' }, `${waiting} waiting`) : icon('right'),
+        ),
+      ),
+    ),
+    h(
+      'section',
+      { class: 'privacy' },
+      h('span', { class: 'ic-box' }, icon('shield')),
+      h('div', {}, h('h2', {}, 'Everything stays on your PC.'), h('p', {}, onPhone ? 'This phone reaches your PC over your home Wi-Fi. Nothing is sent anywhere else.' : 'رقيب has no account and no server.')),
+    ),
+  ];
+}
+
+/** On a phone that isn't connected yet: type the code the PC shows. */
+function phoneSignIn() {
+  const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 7, placeholder: '000000', 'aria-label': 'Code from the PC', class: 'pair-code' });
+  const name = h('input', { type: 'text', maxlength: 40, placeholder: 'My phone', 'aria-label': 'Name for this phone' });
+  const go = oneAtATime(async () => {
+    try {
+      const response = await fetch('/v1/ui/phone/claim', {
+        method: 'POST',
+        headers: { 'x-raqib': '1', 'content-type': 'application/json' },
+        body: JSON.stringify({ code: code.value, name: name.value }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'That did not work');
+      location.hash = '#today';
+      location.reload();
+    } catch (error) {
+      say(error.message, true);
+      code.focus();
+    }
+  });
+  code.addEventListener('keydown', (e) => e.key === 'Enter' && go());
+  main.replaceChildren(
+    h(
+      'div',
+      { class: 'signed-out' },
+      h('img', { src: '/ui/icon.svg', alt: '', width: 64, height: 64 }),
+      h('h1', { style: { margin: '14px 0 8px' } }, 'Connect this phone'),
+      h('p', { class: 'hint' }, 'On the PC, open رقيب, go to Settings, and under “On your phone” press Connect a phone. Type the code it shows.'),
+      h('label', { class: 'field' }, h('span', {}, 'Code'), code),
+      h('label', { class: 'field' }, h('span', {}, 'Name for this phone (optional)'), name),
+      h('button', { class: 'btn primary big', onclick: go }, 'Connect'),
+    ),
+  );
+  code.focus();
+}
+
+/** Settings on the PC: let phones on your Wi-Fi open the window. */
+async function phoneCard() {
+  if (onPhone) return null;
+  let st;
+  try {
+    st = await api('/phone');
+  } catch (error) {
+    if (error instanceof SignedOut) throw error;
+    return null; // The demo has no phone access.
+  }
+  const pairBox = h('div', { class: 'pair-box', hidden: true });
+  const showCode = async () => {
+    try {
+      const p = await api('/phone/pair', { method: 'POST' });
+      pairBox.hidden = false;
+      pairBox.replaceChildren(
+        h('p', { class: 'hint' }, 'On your phone, open this address, then type the code:'),
+        p.urls.length ? p.urls.map((u) => h('div', { class: 'pair-url' }, u)) : h('p', { class: 'hint' }, 'This PC has no address on a home network right now.'),
+        h('div', { class: 'pair-code-show num' }, `${p.code.slice(0, 3)} ${p.code.slice(3)}`),
+        h('p', { class: 'hint' }, `Works until ${clock(p.expiresAt)}, once.`),
+      );
+    } catch (error) {
+      handle(error);
+    }
+  };
+  const flip = async (enabled) => {
+    try {
+      await api('/phone', { method: 'PUT', body: { enabled } });
+      say(enabled ? 'Phones on your Wi-Fi can connect now' : 'Phone access is off');
+    } catch (error) {
+      handle(error);
+    }
+    await render();
+  };
+  return card(
+    'On your phone',
+    st.enabled ? (st.listening ? `Port ${st.port}` : `Port ${st.port} is taken`) : 'Off',
+    h(
+      'label',
+      { class: 'inline' },
+      h('span', { class: 'switch' }, h('input', { type: 'checkbox', checked: st.enabled, onchange: (e) => flip(e.target.checked) }), h('span', { class: 'knob' })),
+      'Let my phone open رقيب on this Wi-Fi',
+    ),
+    h('p', { class: 'hint', style: { marginTop: '8px' } }, 'Only phones you connect here, and only from your home network. The phone talks to this PC directly, without encryption, so leave this off on shared Wi-Fi. Windows may ask once whether to allow رقيب on private networks.'),
+    st.enabled
+      ? [
+          st.devices.length
+            ? h(
+                'ul',
+                { class: 'list', style: { marginTop: '12px' } },
+                st.devices.map((d) =>
+                  h(
+                    'li',
+                    {},
+                    icon('phone'),
+                    h('span', { class: 'grow', dir: 'auto' }, h('strong', {}, d.name), h('span', { class: 'hint' }, ` · last here ${d.lastSeen ? `${longDate(dayKey(d.lastSeen))} ${clock(d.lastSeen)}` : 'never'}`)),
+                    h('button', {
+                      class: 'btn ghost sm danger',
+                      onclick: async () => {
+                        if (!confirm(`Remove ${d.name}? It will need a new code to connect again.`)) return;
+                        try {
+                          await api(`/phone/devices/${d.id}`, { method: 'DELETE' });
+                          await render();
+                        } catch (error) {
+                          handle(error);
+                        }
+                      },
+                    }, 'Remove'),
+                  ),
+                ),
+              )
+            : null,
+          h('div', { class: 'row', style: { marginTop: '12px' } }, h('button', { class: 'btn', onclick: showCode }, icon('plus'), 'Connect a phone')),
+          pairBox,
+        ]
+      : null,
+  );
+}
+
 // ------------------------------------------------------------------ router
 
 function closeOr(hash) {
@@ -5023,6 +5203,7 @@ function handle(error) {
 }
 
 function showSignedOut() {
+  if (onPhone) return phoneSignIn();
   main.replaceChildren(
     h(
       'div',
@@ -5034,13 +5215,13 @@ function showSignedOut() {
   );
 }
 
-const PAGES = { today: todayPage, morning: morningPage, evening: eveningPage, back: backPage, week: weekPage, proposed: proposedPage, projects: projectsPage, health: healthPage, exercise: exercisePage, reminders: remindersPage, settings: settingsPage };
-const TITLES = { today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', proposed: 'Proposed plan', projects: 'Projects', health: 'Health', exercise: 'Exercise', reminders: 'Reminders', settings: 'Settings' };
+const PAGES = { more: morePage, today: todayPage, morning: morningPage, evening: eveningPage, back: backPage, week: weekPage, proposed: proposedPage, projects: projectsPage, health: healthPage, exercise: exercisePage, reminders: remindersPage, settings: settingsPage };
+const TITLES = { more: 'More', today: 'Today', morning: 'Morning', evening: 'Evening log', back: 'Welcome back', week: 'Week', proposed: 'Proposed plan', projects: 'Projects', health: 'Health', exercise: 'Exercise', reminders: 'Reminders', settings: 'Settings' };
 let rendering = 0;
 
 // The demo profile (raqib demo) shows only the tabs chosen for it; null otherwise.
 let demoTabs = null;
-const allowed = (page) => !demoTabs || demoTabs.includes(page === 'exercise' ? 'health' : page);
+const allowed = (page) => !demoTabs || page === 'more' || demoTabs.includes(page === 'exercise' ? 'health' : page);
 
 async function render() {
   const [page = 'today', date] = location.hash.replace(/^#/, '').split('/');
@@ -5050,6 +5231,12 @@ async function render() {
   }
   const view = PAGES[page] ? page : 'today';
   for (const link of document.querySelectorAll('.nav')) link.classList.toggle('active', link.dataset.page === (view === 'exercise' ? 'health' : view));
+  const tab = ['today', 'morning', 'evening', 'week'].includes(view) ? view : view === 'back' ? 'today' : 'more';
+  for (const link of document.querySelectorAll('.tab')) {
+    link.classList.toggle('active', link.dataset.tab === tab);
+    if (link.dataset.tab === tab) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
   if (view !== 'today' && view !== 'evening' && view !== 'health') setTopnav(null);
   document.body.classList.toggle('compact', view === 'back');
   document.title = `رقيب · ${TITLES[view]}`;
@@ -5075,6 +5262,7 @@ window.addEventListener('hashchange', () => {
 });
 // Icons for the rail, and the clock in the title bar.
 for (const link of document.querySelectorAll('.nav[data-icon]')) link.prepend(icon(link.dataset.icon));
+for (const link of document.querySelectorAll('.tab[data-icon]')) link.prepend(h('i', {}, icon(link.dataset.icon)));
 document.querySelector('[data-foot] b')?.prepend(icon('shield'));
 const tick = () => (document.getElementById('clock').textContent = clock(Date.now()));
 tick();
@@ -5090,6 +5278,7 @@ api('/status')
     demoTabs = status.demo.tabs;
     document.body.classList.add('demo');
     for (const link of document.querySelectorAll('.nav[data-page]')) link.hidden = !demoTabs.includes(link.dataset.page);
+    for (const link of document.querySelectorAll('.tab[data-tab]')) link.hidden = link.dataset.tab !== 'more' && !demoTabs.includes(link.dataset.tab);
     const brand = document.querySelector('.brand');
     if (brand) brand.href = `#${demoTabs[0]}`;
   })
