@@ -11,6 +11,10 @@
 // of the work, so they stay in the history but count toward neither the next weight nor the
 // strength score. From 24 Sep it went in as a single-leg hip thrust at 40 kg, one side of
 // 80 (standIns): those sets take its name at 80, unflagged. Goals run on from 80 kg.
+//
+// The standing calf machine (single leg) replaces the dumbbell single-leg calf raise like the
+// chest machines: archived, history kept under the old name, a fresh start. calfWork.ts adds
+// the seated calf machine and tibialis raise after it.
 
 export interface MachineExercise {
   name: string;
@@ -42,6 +46,9 @@ export interface MachineSwap {
 /** A set's flag for work done with form that moved the load off the target muscle: kept, not counted. */
 export const FORM_FLAG = 'form';
 
+/** The standing calf machine (single leg), which the calf superset starts with (calfWork.ts). */
+export const STANDING_CALF_RAISE = 'Machine Standing Single-Leg Calf Raise';
+
 export const MACHINE_SWAPS: MachineSwap[] = [
   {
     replaces: ['Barbell Bench Press', 'Dumbbell Bench Press'],
@@ -65,6 +72,16 @@ export const MACHINE_SWAPS: MachineSwap[] = [
     exercise: {
       name: 'Iso-Lateral Hip Thrust (Machine)', sets: 3, repMin: 8, repMax: 12, step: 5, laterSlot: true, perSide: false, restSeconds: 120, goals: [80, 90, 100, 110, 120],
       note: 'Glutes, not lower back: pad low across the hips, feet so shins are vertical at the top, chin tucked and ribs down. Drive through the heels and stop when hips line up with the torso (no arching past it); squeeze 1 s with a slight tuck. Back or hamstrings take over → lighter. Log the total load.',
+    },
+  },
+  {
+    // The standing calf machine, one leg at a time, in the dumbbell raise's place with its sets
+    // and reps. Its history stays under the dumbbell's name: a machine's load isn't comparable
+    // with a dumbbell in the hand, so the machine starts fresh (no aliases, no goals).
+    replaces: ['Dumbbell Single-Leg Calf Raise'],
+    exercise: {
+      name: STANDING_CALF_RAISE, sets: 3, repMin: 10, repMax: 15, step: 2.5, laterSlot: false, perSide: false, restSeconds: 90,
+      note: 'Unilateral: one leg at a time, log reps per leg (the weight is the machine’s load). Shoulders under the pads, ball of one foot on the edge; 1 s pause in the full stretch at the bottom, rise all the way onto the big toe, no bouncing.',
     },
   },
 ];

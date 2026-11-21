@@ -2,7 +2,8 @@
 // which is why 'setEnd' can target MAX(id) and the store needs no extra state.
 import Database from 'better-sqlite3';
 import type { Activity, Op, OpenEvent, WindowInfo } from './merger.ts';
-import { MACHINE_SWAPS, machineSwapSql } from './machineSwap.ts';
+import { MACHINE_SWAPS, STANDING_CALF_RAISE, machineSwapSql } from './machineSwap.ts';
+import { calfWorkSql } from './calfWork.ts';
 import { seedSql } from './trainingSeed.ts';
 
 const MIGRATIONS: string[] = [
@@ -381,6 +382,12 @@ const MIGRATIONS: string[] = [
   // ...and the single-leg thrusts that were really that machine, one side logged (machineSwap.ts).
   `
   ${machineSwapSql(Date.now(), MACHINE_SWAPS.filter((s) => s.standIns?.length))}
+  `,
+  // The standing calf machine replaces the dumbbell single-leg calf raise (its history keeps
+  // the dumbbell's name), and the seated calf machine and a tibialis raise follow it (calfWork.ts).
+  `
+  ${machineSwapSql(Date.now(), MACHINE_SWAPS.filter((s) => s.exercise.name === STANDING_CALF_RAISE))}
+  ${calfWorkSql(Date.now())}
   `,
 ];
 

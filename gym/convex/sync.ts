@@ -47,7 +47,7 @@ export const pushPlan = mutation({
     const planPushed = !hasPlans || !!replacePlan;
     if (planPushed) {
       const rest = new Map((await ctx.db.query('planExercises').collect()).map((e) => [e.num, e.restSeconds]));
-      for (const table of ['plans', 'planDays', 'planExercises'] as const) {
+      for (const table of ['plans', 'planDays', 'planExercises', 'supersets'] as const) {
         for (const row of await ctx.db.query(table).collect()) await ctx.db.delete(row._id);
       }
       await ctx.db.insert('plans', { num: 1, name: 'Main plan', note: null, active: true, createdAt: Date.now() });

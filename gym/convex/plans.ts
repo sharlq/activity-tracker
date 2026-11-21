@@ -8,6 +8,7 @@ import { mutation, query } from './_generated/server';
 import { checkGymKey } from './access';
 import { nextNum } from './lib/nums';
 import { planView } from './lib/planView';
+import { groupedOrder, supersetInfo } from './lib/supersets';
 
 const nullable = <T extends Parameters<typeof v.union>[0]>(t: T) => v.union(t, v.null());
 
@@ -42,6 +43,41 @@ async function exerciseByNum(ctx: MutationCtx, num: number): Promise<Doc<'planEx
 
 const daysOf = (ctx: MutationCtx, planNum: number) => ctx.db.query('planDays').withIndex('by_plan', (q) => q.eq('planNum', planNum)).collect();
 const exercisesOf = async (ctx: MutationCtx, dayNum: number) => (await ctx.db.query('planExercises').collect()).filter((e) => e.dayNum === dayNum);
+const supersetsOf = (ctx: MutationCtx, dayNum: number) => ctx.db.query('supersets').withIndex('by_day', (q) => q.eq('dayNum', dayNum)).collect();
+
+/** A day's active exercises as the screens show them (a superset's members together), and each one's superset. */
+async function dayOrder(ctx: MutationCtx, dayNum: number) {
+  const active = (await exercisesOf(ctx, dayNum)).filter((e) => e.active).sort((a, b) => a.position - b.position || a.num - b.num);
+  const info = supersetInfo(active, await supersetsOf(ctx, dayNum));
+  return { list: groupedOrder(active, (e) => e.num, info), info };
+}
+
+/**
+ * After a change to a day's supersets or order: positions 1..n in the order shown, members
+ * numbered 1..k in their group, and a superset left with fewer than two members goes (its
+ * last member is a plain lift again).
+ */
+async function settleDay(ctx: MutationCtx, dayNum: number, list?: Doc<'planExercises'>[]): Promise<void> {
+  const shown = list ?? (await dayOrder(ctx, dayNum)).list;
+  const supersets = await supersetsOf(ctx, dayNum);
+  const members = new Map<number, Doc<'planExercises'>[]>();
+  for (const e of shown) if (e.supersetNum !== undefined) members.set(e.supersetNum, [...(members.get(e.supersetNum) ?? []), e]);
+  for (const g of supersets) if ((members.get(g.num)?.length ?? 0) < 2) await ctx.db.delete(g._id);
+  const live = new Set(supersets.filter((g) => (members.get(g.num)?.length ?? 0) >= 2).map((g) => g.num));
+  const orderIn = new Map<number, number>();
+  for (const [i, e] of shown.entries()) {
+    const keep = e.supersetNum !== undefined && live.has(e.supersetNum);
+    const order = keep ? (orderIn.get(e.supersetNum!) ?? 0) + 1 : undefined;
+    if (keep) orderIn.set(e.supersetNum!, order!);
+    const patch: Partial<Doc<'planExercises'>> = {};
+    if (e.position !== i + 1) patch.position = i + 1;
+    if (e.supersetOrder !== order) patch.supersetOrder = order;
+    if (!keep && e.supersetNum !== undefined) patch.supersetNum = undefined;
+    if (Object.keys(patch).length) await ctx.db.patch(e._id, patch);
+  }
+  // Archived lifts in a superset aren't in it any more.
+  for (const e of (await exercisesOf(ctx, dayNum)).filter((x) => !x.active && x.supersetNum !== undefined)) await ctx.db.patch(e._id, { supersetNum: undefined, supersetOrder: undefined });
+}
 
 /** Puts a list in order 1..n after a move or a removal. */
 async function renumber<T extends 'planDays' | 'planExercises'>(ctx: MutationCtx, rows: Doc<T>[]): Promise<void> {
@@ -56,10 +92,11 @@ export const list = query({
   args: { key: v.string() },
   handler: async (ctx, { key }) => {
     checkGymKey(key);
-    const [plans, days, exercises, workouts] = await Promise.all([
+    const [plans, days, exercises, supersets, workouts] = await Promise.all([
       ctx.db.query('plans').collect(),
       ctx.db.query('planDays').collect(),
       ctx.db.query('planExercises').collect(),
+      ctx.db.query('supersets').collect(),
       ctx.db.query('workouts').filter((q) => q.neq(q.field('deleted'), true)).collect(),
     ]);
     const used = new Map<string, { name: string; n: number }>();
@@ -73,7 +110,7 @@ export const list = query({
     }
     for (const e of exercises) if (!used.has(e.name.toLowerCase())) used.set(e.name.toLowerCase(), { name: e.name, n: 0 });
     return {
-      plans: planView(plans, days, exercises),
+      plans: planView(plans, days, exercises, supersets),
       names: [...used.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)).map((x) => x.name),
     };
   },
@@ -94,10 +131,18 @@ export const createPlan = mutation({
       for (const d of await daysOf(ctx, copyFrom)) {
         const dayNum = await nextNum(ctx);
         await ctx.db.insert('planDays', { num: dayNum, planNum: num, name: d.name, position: d.position, note: d.note });
+        // Supersets come too, as new ones on the new day.
+        const groups = new Map<number, number>();
+        for (const g of await supersetsOf(ctx, d.num)) {
+          const n = await nextNum(ctx);
+          groups.set(g.num, n);
+          await ctx.db.insert('supersets', { num: n, dayNum, restSeconds: g.restSeconds });
+        }
         for (const e of await exercisesOf(ctx, d.num)) {
           if (!e.active) continue;
-          const { _id, _creationTime, num: _old, dayNum: _day, ...rest } = e;
-          await ctx.db.insert('planExercises', { ...rest, num: await nextNum(ctx), dayNum });
+          const { _id, _creationTime, num: _old, dayNum: _day, supersetNum, supersetOrder, ...rest } = e;
+          const group = supersetNum === undefined ? undefined : groups.get(supersetNum);
+          await ctx.db.insert('planExercises', { ...rest, num: await nextNum(ctx), dayNum, ...(group !== undefined ? { supersetNum: group, supersetOrder } : {}) });
         }
       }
     }
@@ -135,6 +180,7 @@ export const deletePlan = mutation({
     if (p.active) throw new ConvexError('Switch to another plan before removing this one');
     for (const d of await daysOf(ctx, planNum)) {
       for (const e of await exercisesOf(ctx, d.num)) await ctx.db.delete(e._id);
+      for (const g of await supersetsOf(ctx, d.num)) await ctx.db.delete(g._id);
       await ctx.db.delete(d._id);
     }
     await ctx.db.delete(p._id);
@@ -188,6 +234,7 @@ export const deleteDay = mutation({
     checkGymKey(key);
     const d = await dayByNum(ctx, dayNum);
     for (const e of await exercisesOf(ctx, dayNum)) await ctx.db.delete(e._id);
+    for (const g of await supersetsOf(ctx, dayNum)) await ctx.db.delete(g._id);
     await ctx.db.delete(d._id);
     await renumber(ctx, await daysOf(ctx, d.planNum));
   },
@@ -261,12 +308,29 @@ export const moveExercise = mutation({
   handler: async (ctx, { key, exerciseNum, by }) => {
     checkGymKey(key);
     const e = await exerciseByNum(ctx, exerciseNum);
-    const list = (await exercisesOf(ctx, e.dayNum)).filter((x) => x.active).sort((a, b) => a.position - b.position || a.num - b.num);
+    const { list, info } = await dayOrder(ctx, e.dayNum);
+    const dir = Math.sign(by);
     const i = list.findIndex((x) => x.num === exerciseNum);
-    const j = i + Math.sign(by);
-    if (j < 0 || j >= list.length) return;
-    [list[i], list[j]] = [list[j]!, list[i]!];
-    for (const [k, x] of list.entries()) if (x.position !== k + 1) await ctx.db.patch(x._id, { position: k + 1 });
+    const mine = info.get(exerciseNum);
+    const j = i + dir;
+    // Inside a superset it trades places with the member next to it.
+    if (mine && j >= 0 && j < list.length && info.get(list[j]!.num)?.num === mine.num) {
+      [list[i], list[j]] = [list[j]!, list[i]!];
+      return settleDay(ctx, e.dayNum, list);
+    }
+    // Otherwise its block (the lift, or its whole superset) moves past the block beside it.
+    const blocks: Doc<'planExercises'>[][] = [];
+    for (const x of list) {
+      const g = info.get(x.num)?.num;
+      const last = blocks.at(-1);
+      if (g !== undefined && last && info.get(last[0]!.num)?.num === g) last.push(x);
+      else blocks.push([x]);
+    }
+    const b = blocks.findIndex((blk) => blk.some((x) => x.num === exerciseNum));
+    const c = b + dir;
+    if (c < 0 || c >= blocks.length) return;
+    [blocks[b], blocks[c]] = [blocks[c]!, blocks[b]!];
+    await settleDay(ctx, e.dayNum, blocks.flat());
   },
 });
 
@@ -277,5 +341,68 @@ export const deleteExercise = mutation({
     const e = await exerciseByNum(ctx, exerciseNum);
     await ctx.db.delete(e._id);
     await renumber(ctx, await exercisesOf(ctx, e.dayNum));
+    // A superset left with one member goes.
+    if (e.supersetNum !== undefined) await settleDay(ctx, e.dayNum);
+  },
+});
+
+// ------------------------------------------------------------------ supersets
+
+/**
+ * This exercise and the one shown after it become a superset (a set of each, then one rest).
+ * If either is in one already, the other joins it; two supersets side by side become one.
+ */
+export const supersetWithNext = mutation({
+  args: { key: v.string(), exerciseNum: v.number() },
+  handler: async (ctx, { key, exerciseNum }) => {
+    checkGymKey(key);
+    const e = await exerciseByNum(ctx, exerciseNum);
+    const { list, info } = await dayOrder(ctx, e.dayNum);
+    const mine = info.get(e.num);
+    const i = list.findIndex((x) => x.num === e.num);
+    const next = list.slice(i + 1).find((x) => !mine || info.get(x.num)?.num !== mine.num);
+    if (!next) throw new ConvexError('Nothing after it on this day to superset with');
+    const theirs = info.get(next.num);
+    let group = mine?.num ?? theirs?.num;
+    if (group === undefined) {
+      group = await nextNum(ctx);
+      await ctx.db.insert('supersets', { num: group, dayNum: e.dayNum, restSeconds: Math.max(e.restSeconds, next.restSeconds) });
+    }
+    // Everything in either group, in the order shown, goes into one.
+    const joining = list.filter((x) => x.num === e.num || x.num === next.num || (mine && info.get(x.num)?.num === mine.num) || (theirs && info.get(x.num)?.num === theirs.num));
+    for (const x of joining) if (x.supersetNum !== group) await ctx.db.patch(x._id, { supersetNum: group });
+    const ids = new Set(joining.map((x) => x.num));
+    const first = list.findIndex((x) => ids.has(x.num));
+    const shown = [...list.slice(0, first).filter((x) => !ids.has(x.num)), ...joining.map((x) => ({ ...x, supersetNum: group })), ...list.slice(first).filter((x) => !ids.has(x.num))];
+    await settleDay(ctx, e.dayNum, shown);
+    return group;
+  },
+});
+
+/** Done on its own again; a superset left with one member goes. */
+export const leaveSuperset = mutation({
+  args: { key: v.string(), exerciseNum: v.number() },
+  handler: async (ctx, { key, exerciseNum }) => {
+    checkGymKey(key);
+    const e = await exerciseByNum(ctx, exerciseNum);
+    if (e.supersetNum === undefined) return;
+    const { list } = await dayOrder(ctx, e.dayNum);
+    // It goes just after the superset it leaves.
+    const rest = list.filter((x) => x.num !== e.num);
+    const lastOfGroup = rest.findLastIndex((x) => x.supersetNum === e.supersetNum);
+    const shown = [...rest.slice(0, lastOfGroup + 1), { ...e, supersetNum: undefined }, ...rest.slice(lastOfGroup + 1)];
+    await ctx.db.patch(e._id, { supersetNum: undefined, supersetOrder: undefined });
+    await settleDay(ctx, e.dayNum, shown as Doc<'planExercises'>[]);
+  },
+});
+
+/** The rest after each round of a superset. */
+export const updateSuperset = mutation({
+  args: { key: v.string(), supersetNum: v.number(), restSeconds: v.number() },
+  handler: async (ctx, { key, supersetNum, restSeconds }) => {
+    checkGymKey(key);
+    const g = await ctx.db.query('supersets').withIndex('by_num', (q) => q.eq('num', supersetNum)).unique();
+    if (!g) throw new ConvexError('no such superset');
+    await ctx.db.patch(g._id, { restSeconds: whole(restSeconds, 10, 900, 'Rest (seconds)') });
   },
 });

@@ -10,6 +10,7 @@ import { set } from './schema';
 import { nextNum } from './lib/nums';
 import { activePlan, loadAll, planExerciseOf, planOfDay, sourceOf } from './lib/source';
 import { minutesOf, pickPrevious, summarize } from './lib/summary';
+import { groupedOrder, supersetInfo } from './lib/supersets';
 import { nextPlanDay, todayView } from '../../tracker/src/trainingPlan.ts';
 
 const day = v.string();
@@ -51,6 +52,9 @@ export const today = query({
     if (!view) throw new ConvexError('no such plan day');
     const workout = view.workoutId === null ? null : data.workouts.find((w) => w.num === view.workoutId) ?? null;
     const rest = new Map(data.exercises.map((e) => [e.num, e.restSeconds]));
+    // Supersets on this day: their members come together, A1 then A2, and rest after each round.
+    const dayDocs = data.exercises.filter((e) => e.dayNum === view.day.id && e.active).sort((a, b) => a.position - b.position || a.num - b.num);
+    const supersets = supersetInfo(dayDocs, data.supersets.filter((g) => g.dayNum === view.day.id));
     // How hard each set felt (RPE), which the engine's view of a set doesn't carry.
     const rpeOf = new Map((workout?.sets ?? []).map((s) => [s.num, s.rpe]));
     return {
@@ -63,7 +67,7 @@ export const today = query({
       next,
       started,
       workout: workout ? { num: workout.num, start: workout.start, end: workout.end, sets: workout.sets.length } : null,
-      exercises: view.exercises.map(({ state, logged, now }) => ({
+      exercises: groupedOrder(view.exercises, (x) => x.state.exercise.id, supersets).map(({ state, logged, now }) => ({
         num: state.exercise.id,
         name: state.exercise.name,
         note: state.exercise.note,
@@ -78,6 +82,7 @@ export const today = query({
         perSide: !!state.rule.perSide,
         laterSlot: state.rule.laterSlot,
         restSeconds: rest.get(state.exercise.id) ?? 90,
+        superset: supersets.get(state.exercise.id) ?? null,
         suggested: state.suggestion.weight,
         suggestedLabel: state.suggestedLabel,
         beat: state.suggestion.beat,

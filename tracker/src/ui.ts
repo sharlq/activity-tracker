@@ -31,6 +31,8 @@ import { healthRoutes } from './uiHealth.ts';
 import { trainingRoutes } from './uiTraining.ts';
 import { projectRoutes } from './uiProjects.ts';
 import { proposalRoutes } from './uiProposals.ts';
+import type { PhoneAccess } from './phone.ts';
+import { phoneRequests } from './phone.ts';
 import type { Category, DayFigures, Gap, LoggedDistraction, Report, Segment, Sleep, WeekTotals } from './report/index.ts';
 import {
   buildReport,
@@ -75,7 +77,7 @@ const SECURITY_HEADERS = {
   'cache-control': 'no-store',
 };
 const COOKIE = 'raqib';
-const PAGES = new Set(['today', 'morning', 'evening', 'back', 'week', 'proposed', 'projects', 'health', 'reminders', 'settings']);
+const PAGES = new Set(['more', 'today', 'morning', 'evening', 'back', 'week', 'proposed', 'projects', 'health', 'reminders', 'settings']);
 
 /** Activities you might log for time away from the PC, besides the screen categories. */
 export const LIFE_CATEGORIES = ['sleep', 'in bed', 'sleep routine', 'pre shower', 'meal', 'exercise', 'errand', 'commute', 'social', 'rest', 'prayer', 'chores', 'study'];
@@ -173,6 +175,8 @@ export interface UiDeps {
   demo?: { tabs: string[] };
   /** Host names pages may come from; 127.0.0.1 and localhost unless set (the demo has its own). */
   hostNames?: readonly string[];
+  /** Opening the window from a phone on the home network (phone.ts); absent in the demo. */
+  phone?: PhoneAccess;
 }
 
 export interface DayView {
@@ -581,6 +585,13 @@ function login(request: IncomingMessage, response: ServerResponse, url: URL, tok
 }
 
 function checkUiRequest(request: IncomingMessage, port: number, token: string, hostNames: readonly string[] = DEFAULT_HOST_NAMES): void {
+  if (phoneRequests.has(request)) {
+    // phone.ts has checked the address, the Host and the phone's own cookie.
+    if (request.headers['x-raqib'] !== '1') throw new HttpError(403, 'missing X-Raqib header');
+    const origin = request.headers.origin;
+    if (origin !== undefined && origin !== `http://${request.headers.host}`) throw new HttpError(403, 'origin not allowed');
+    return;
+  }
   const cookie = cookies(request).get(COOKIE) ?? '';
   if (!safeEqual(cookie, cookieValue(token))) throw new HttpError(401, 'not signed in');
   if (request.headers['x-raqib'] !== '1') throw new HttpError(403, 'missing X-Raqib header');
@@ -616,7 +627,22 @@ export function createUi(deps: UiDeps) {
       return send(response, 200, await buildDay(deps, url.searchParams.get('date') ?? dayKey(now()), now()));
     }
     if (method === 'GET' && route === '/status') {
-      return send(response, 200, { now: now(), today: dayKey(now()), settings: readSettings(journal), demo: deps.demo ?? null });
+      return send(response, 200, { now: now(), today: dayKey(now()), settings: readSettings(journal), demo: deps.demo ?? null, onPhone: phoneRequests.has(request) });
+    }
+
+    if (route === '/phone' || route.startsWith('/phone/')) {
+      if (phoneRequests.has(request)) throw new HttpError(403, 'connect and remove phones on the PC');
+      const phone = deps.phone;
+      if (!phone) throw new HttpError(503, 'phone access is not available here');
+      if (method === 'GET' && route === '/phone') return send(response, 200, phone.status());
+      if (method === 'PUT' && route === '/phone') {
+        const body = (await readJson(request)) as Record<string, unknown>;
+        if (typeof body['enabled'] !== 'boolean') throw new HttpError(400, 'enabled must be true or false');
+        return send(response, 200, await phone.setEnabled(body['enabled']));
+      }
+      if (method === 'POST' && route === '/phone/pair') return send(response, 200, phone.startPairing());
+      if (method === 'DELETE' && (m = /^\/phone\/devices\/([0-9a-f]{12})$/.exec(route))) return send(response, phone.removeDevice(m[1] as string) ? 204 : 404);
+      throw new HttpError(404, 'not found');
     }
 
     if (method === 'POST' && route === '/entries') return send(response, 201, journal.addEntry(entryBody(await readJson(request)), now()));

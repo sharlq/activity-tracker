@@ -13,6 +13,7 @@ export interface Loaded {
   plans: Doc<'plans'>[];
   days: Doc<'planDays'>[];
   exercises: Doc<'planExercises'>[];
+  supersets: Doc<'supersets'>[];
   workouts: Doc<'workouts'>[];
   checkpoints: Doc<'checkpoints'>[];
   bodyGoals: Doc<'bodyGoals'>[];
@@ -21,17 +22,18 @@ export interface Loaded {
 }
 
 export async function loadAll(ctx: QueryCtx): Promise<Loaded> {
-  const [plans, days, exercises, workouts, checkpoints, bodyGoals, weighIns, settings] = await Promise.all([
+  const [plans, days, exercises, supersets, workouts, checkpoints, bodyGoals, weighIns, settings] = await Promise.all([
     ctx.db.query('plans').collect(),
     ctx.db.query('planDays').collect(),
     ctx.db.query('planExercises').collect(),
+    ctx.db.query('supersets').collect(),
     ctx.db.query('workouts').filter((q) => q.neq(q.field('deleted'), true)).collect(),
     ctx.db.query('checkpoints').collect(),
     ctx.db.query('bodyGoals').collect(),
     ctx.db.query('weighIns').collect(),
     ctx.db.query('settings').collect(),
   ]);
-  return { plans, days, exercises, workouts, checkpoints, bodyGoals, weighIns, settings };
+  return { plans, days, exercises, supersets, workouts, checkpoints, bodyGoals, weighIns, settings };
 }
 
 /** The plan "today" follows: the one marked active, else the oldest. */

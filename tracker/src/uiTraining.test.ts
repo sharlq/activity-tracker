@@ -74,7 +74,8 @@ describe('training plan routes in the window', () => {
   it('seeds the plan, suggests from history, and gives a verdict as sets are logged', async () => {
     const plan = (await call('/training/plan')).json;
     assert.deepEqual(plan.days.map((d: { name: string }) => d.name), ['Upper A', 'Lower A', 'Upper B', 'Lower B']);
-    assert.equal(plan.exercises.length, 28);
+    // 28 seeded, plus the seated calf machine and the tibialis raise (calfWork.ts).
+    assert.equal(plan.exercises.length, 30);
     const squat = plan.exercises.find((e: { exercise: { name: string } }) => e.exercise.name === 'Barbell Squat');
     assert.equal(squat.suggestedLabel, '85 kg');
     assert.deepEqual(squat.exercise.goals.map((g: { weight: number }) => g.weight), [85, 90, 95, 100, 102.5]);

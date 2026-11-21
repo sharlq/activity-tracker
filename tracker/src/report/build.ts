@@ -7,7 +7,7 @@ import type { CategoryConfig } from './categories.ts';
 import type { Block, CategoryTotal, GamingSession, Ranked, Segment, Stretch } from './report.ts';
 import { gamingSessions, longestFocus, switches, timeline, toSegments, top, totals } from './report.ts';
 import type { Multitasking } from './multitask.ts';
-import { multitasking } from './multitask.ts';
+import { isPhoneEntry, multitasking } from './multitask.ts';
 import type { OtherScreens } from './screens.ts';
 import { otherScreens } from './screens.ts';
 
@@ -100,8 +100,8 @@ export interface Report {
   multitasking: Multitasking;
   /** What was up on the screens without the focus. */
   otherScreens: OtherScreens;
-  /** What you logged yourself for the gaps, oldest first. */
-  entries: Entry[];
+  /** What you logged yourself for the gaps, oldest first. `phone` marks phone use, which runs alongside the rest. */
+  entries: (Entry & { phone: boolean })[];
 }
 
 export interface ReportInput {
@@ -204,6 +204,6 @@ export function buildReport({ kind, from, to, events, claudeSessions, categories
     longestFocus: longestFocus(blocks, categories),
     multitasking: multitasking(segments, audio.map((e) => ({ ...e, start: Math.max(e.start, from), end: Math.min(e.end, to) })), clippedEntries),
     otherScreens: otherScreens(segments, screens.filter((e) => e.start < to && e.end > from).map((e) => ({ ...e, start: Math.max(e.start, from), end: Math.min(e.end, to) })), categories, games, kind),
-    entries: entries.filter((e) => e.start < to && e.end > from).toSorted((a, b) => a.start - b.start),
+    entries: entries.filter((e) => e.start < to && e.end > from).toSorted((a, b) => a.start - b.start).map((e) => ({ ...e, phone: isPhoneEntry(e) })),
   };
 }

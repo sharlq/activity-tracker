@@ -7,12 +7,12 @@
 
 export type Muscle =
   | 'Chest' | 'Lats' | 'Upper back' | 'Traps' | 'Front delts' | 'Side delts' | 'Rear delts' | 'Biceps' | 'Triceps' | 'Forearms'
-  | 'Abs' | 'Lower back' | 'Quads' | 'Hamstrings' | 'Glutes' | 'Adductors' | 'Calves';
+  | 'Abs' | 'Lower back' | 'Quads' | 'Hamstrings' | 'Glutes' | 'Adductors' | 'Calves' | 'Tibialis';
 
 /** In the order the summary lists them: upper body, then trunk, then lower body. */
 export const MUSCLES: readonly Muscle[] = [
   'Chest', 'Lats', 'Upper back', 'Traps', 'Front delts', 'Side delts', 'Rear delts', 'Biceps', 'Triceps', 'Forearms',
-  'Abs', 'Lower back', 'Quads', 'Hamstrings', 'Glutes', 'Adductors', 'Calves',
+  'Abs', 'Lower back', 'Quads', 'Hamstrings', 'Glutes', 'Adductors', 'Calves', 'Tibialis',
 ];
 
 /** The muscles a growth range (about 10–20 hard sets, twice a week) is judged for. Small helpers are shown without one. */
@@ -30,6 +30,8 @@ const RULES: [RegExp, Works][] = [
   [/leg curl|hamstring curl|nordic/, W(['Hamstrings'])],
   [/leg extension/, W(['Quads'])],
   [/calf/, W(['Calves'])],
+  // Tibialis anterior, the front of the shin: toes pulled up toward the shin.
+  [/tibialis|tib raise|toe raise/, W(['Tibialis'])],
   [/adduct/, W(['Adductors'])],
   [/abduct|kickback|glute bridge|hip thrust/, W(['Glutes'], ['Hamstrings'])],
   [/romanian|rdl|stiff[- ]leg|good morning/, W(['Hamstrings', 'Glutes'], ['Lower back'])],

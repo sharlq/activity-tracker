@@ -39,6 +39,8 @@ import { dayKey, detectReturn, dueSlot, eveningDue, morningDue, projectReminderD
 import type { ProjectOverview } from './projects.ts';
 import { unanswered } from './projects.ts';
 import { union } from './report/index.ts';
+import type { PhoneAccess } from './phone.ts';
+import { createPhoneAccess } from './phone.ts';
 import { buildDay, createUi, readSettings, readState } from './ui.ts';
 
 /** Ticks can run late under load, so only a clearly longer silence is a gap. */
@@ -526,8 +528,18 @@ export function startService(
   const timer = setInterval(tick, config.pollIntervalMs);
 
   let api: Server | null = null;
+  let phone: PhoneAccess | null = null;
   if (options.apiToken !== undefined) {
+    // The phone listener hands its requests to the same window code; bound once both exist.
+    let forPhone: ReturnType<typeof createUi> | null = null;
+    phone = createPhoneAccess({
+      store: journal,
+      logger,
+      port: config.api.port + 1,
+      ui: (request, response, port) => (forPhone as ReturnType<typeof createUi>)(request, response, port),
+    });
     const ui = createUi({
+      phone,
       journal,
       dbPath: dbPath(),
       config,
@@ -549,6 +561,8 @@ export function startService(
       if (syncGym && request.method === 'GET' && request.url?.split('?')[0] === '/v1/ui/status') syncGym('window opened');
       return ui(request, response, port);
     };
+    forPhone = uiAndSync;
+    phone.start().catch((error: unknown) => logger.error('Phone access did not start', error));
     api = createApi(options.apiToken, { onTab: receiveTab, onEditor: receiveEditor, onAudibleTabs: receiveAudibleTabs, onVisibleTabs: receiveVisibleTabs, ui: uiAndSync }, logger);
     listen(api, config.api.port).then(
       (port) => {
@@ -573,6 +587,7 @@ export function startService(
     receiveAudibleTabs,
     receiveVisibleTabs,
     stop(): void {
+      phone?.stop();
       api?.close();
       api?.closeAllConnections();
       clearInterval(gamepadTimer);
