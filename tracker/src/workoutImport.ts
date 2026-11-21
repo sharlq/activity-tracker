@@ -10,6 +10,7 @@ import { copiedRuns, median } from './progression.ts';
 import type { Journal, NewSet, NewWorkout, WorkoutKind } from './journal.ts';
 import { WORKOUT_KINDS } from './journal.ts';
 import { dayKey } from './planner.ts';
+import { FORM_FLAG, historyNameFor } from './machineSwap.ts';
 
 /** Header names each field may go by, compared lowercased with only letters and digits. */
 export const COLUMNS = {
@@ -380,6 +381,15 @@ export function importWorkouts(text: string, { file = '', source: sourceOption, 
     warnings.push(`Some dates could be read either way (like 03/04): read as ${dateOrder === 'mdy' ? 'month/day' : 'day/month'}. Pass --dates ${dateOrder === 'mdy' ? 'dmy' : 'mdy'} if that's wrong.`);
   }
   if (distanceIgnored) warnings.push('Some sessions have a distance, which isn\'t imported yet (its unit isn\'t known).');
+  // The old app's stand-ins for a machine it didn't have go by the machine's name (machineSwap.ts).
+  for (const w of workouts) {
+    for (const e of w.exercises) {
+      const name = historyNameFor(e.name);
+      if (!name) continue;
+      e.name = name;
+      for (const s of e.sets) s.flag ??= FORM_FLAG;
+    }
+  }
   const flaggedSets = flagOutliers(workouts);
   const copied = findCopied(workouts);
   if (copied.length) warnings.push(`${copied.reduce((n, c) => n + c.sessions, 0)} session(s) of ${copied.length} exercise(s) are the same as the session before, 3+ times in a row: maybe copied forward by the old app. They're imported, but don't count toward stall flags.`);

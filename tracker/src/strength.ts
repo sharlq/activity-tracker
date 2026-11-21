@@ -15,7 +15,7 @@
 // arms don't outweigh legs; arms (biceps, triceps) and the posterior chain (glutes,
 // hamstrings) count as one group each in it. A lift can train more than one group: a
 // deadlift counts toward glutes and hamstrings, each as its own reference lift. Pure: it reads sets and weigh-ins, nothing else.
-import { estimated1RM } from './progression.ts';
+import { estimated1RM, skipsSet } from './progression.ts';
 
 export type GroupId = 'chest' | 'back' | 'shoulders' | 'biceps' | 'triceps' | 'quads' | 'glutes' | 'hamstrings';
 export type Standards = 'men' | 'women';
@@ -104,6 +104,8 @@ const LIFTS: readonly LiftRule[] = [
   // Glutes: hip thrust. Deadlifts load the glutes too, but less than a thrust does.
   { match: /^(barbell )?hip thrust$/, group: 'glutes', load: 'total', factor: 1 },
   { match: /^smith machine hip thrust$|^hip thrust \(machine\)$|^machine hip thrust$/, group: 'glutes', load: 'total', factor: 0.9 },
+  // A lever machine with independent arms isn't calibrated like a bar: counted conservatively.
+  { match: /^iso-lateral hip thrust \(machine\)$/, group: 'glutes', load: 'total', factor: 0.8 },
   { match: /^(barbell |conventional |sumo )?deadlift$/, group: 'glutes', load: 'total', factor: 0.85 },
   { match: /^(trap|hex) bar deadlift$/, group: 'glutes', load: 'total', factor: 0.8 },
   { match: /^(barbell )?(romanian deadlift|rdl|stiff[- ]leg(ged)? deadlift)$/, group: 'glutes', load: 'total', factor: 1 },
@@ -308,7 +310,7 @@ export function strengthScores(sets: readonly StrengthSet[], weighIns: readonly 
   const uncounted = new Map<string, string>();
   if (bw !== null) {
     for (const s of sets) {
-      if (s.day > day || s.day < lapseFrom || s.flag === 'outlier' || s.reps === null || s.reps < 1 || s.reps > MAX_REPS) continue;
+      if (s.day > day || s.day < lapseFrom || skipsSet(s.flag) || s.reps === null || s.reps < 1 || s.reps > MAX_REPS) continue;
       const recent = s.day >= from;
       const rules = liftRules(s.exercise);
       if (!rules.length && recent && !uncounted.has(s.exercise.trim().toLowerCase())) uncounted.set(s.exercise.trim().toLowerCase(), s.exercise.trim());
