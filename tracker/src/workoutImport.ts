@@ -10,7 +10,7 @@ import { copiedRuns, median } from './progression.ts';
 import type { Journal, NewSet, NewWorkout, WorkoutKind } from './journal.ts';
 import { WORKOUT_KINDS } from './journal.ts';
 import { dayKey } from './planner.ts';
-import { FORM_FLAG, historyNameFor } from './machineSwap.ts';
+import { historyFor } from './machineSwap.ts';
 
 /** Header names each field may go by, compared lowercased with only letters and digits. */
 export const COLUMNS = {
@@ -384,10 +384,13 @@ export function importWorkouts(text: string, { file = '', source: sourceOption, 
   // The old app's stand-ins for a machine it didn't have go by the machine's name (machineSwap.ts).
   for (const w of workouts) {
     for (const e of w.exercises) {
-      const name = historyNameFor(e.name);
-      if (!name) continue;
-      e.name = name;
-      for (const s of e.sets) s.flag ??= FORM_FLAG;
+      const to = historyFor(e.name);
+      if (!to) continue;
+      e.name = to.name;
+      for (const s of e.sets) {
+        if (to.flag) s.flag ??= to.flag;
+        if (s.weight !== null) s.weight *= to.weightTimes;
+      }
     }
   }
   const flaggedSets = flagOutliers(workouts);

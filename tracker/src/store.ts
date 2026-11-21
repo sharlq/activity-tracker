@@ -378,6 +378,10 @@ const MIGRATIONS: string[] = [
   `
   ${machineSwapSql(Date.now(), MACHINE_SWAPS.filter((s) => s.renameHistory))}
   `,
+  // ...and the single-leg thrusts that were really that machine, one side logged (machineSwap.ts).
+  `
+  ${machineSwapSql(Date.now(), MACHINE_SWAPS.filter((s) => s.standIns?.length))}
+  `,
 ];
 
 /** Brings a database up to the newest schema. Safe to call from several connections. */
