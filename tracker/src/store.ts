@@ -2,7 +2,7 @@
 // which is why 'setEnd' can target MAX(id) and the store needs no extra state.
 import Database from 'better-sqlite3';
 import type { Activity, Op, OpenEvent, WindowInfo } from './merger.ts';
-import { machineSwapSql } from './machineSwap.ts';
+import { MACHINE_SWAPS, machineSwapSql } from './machineSwap.ts';
 import { seedSql } from './trainingSeed.ts';
 
 const MIGRATIONS: string[] = [
@@ -372,6 +372,15 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE entries ADD COLUMN workout_id INTEGER;
   CREATE UNIQUE INDEX idx_entries_workout ON entries (workout_id) WHERE workout_id IS NOT NULL;
+  `,
+  // The hip thrust machine takes the Smith machine hip thrust's place in the plan and its
+  // history, which the old app logged under that name (see machineSwap.ts).
+  `
+  ${machineSwapSql(Date.now(), MACHINE_SWAPS.filter((s) => s.renameHistory))}
+  `,
+  // ...and the single-leg thrusts that were really that machine, one side logged (machineSwap.ts).
+  `
+  ${machineSwapSql(Date.now(), MACHINE_SWAPS.filter((s) => s.standIns?.length))}
   `,
 ];
 

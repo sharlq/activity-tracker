@@ -205,6 +205,9 @@ export const swapToMachines = mutation({
     const plans = await ctx.db.query('plans').collect();
     const days = await ctx.db.query('planDays').collect();
     const exercises = await ctx.db.query('planExercises').collect();
+    // A machine with goals (the hip thrust) gets one per checkpoint, in order.
+    const checkpoints = (await ctx.db.query('checkpoints').collect()).map((c) => c.day).sort();
+    const goalsOf = (m: (typeof MACHINE_SWAPS)[number]['exercise']) => (m.goals ?? []).flatMap((weight, i) => (checkpoints[i] ? [{ day: checkpoints[i] as string, weight }] : []));
     const changes: { plan: string; active: boolean; day: string; archived: { name: string; position: number }[]; added: string; position: number }[] = [];
     for (const d of [...days].sort((a, b) => a.planNum - b.planNum || a.position - b.position)) {
       const plan = plans.find((p) => p.num === d.planNum);
@@ -221,7 +224,7 @@ export const swapToMachines = mutation({
         if (!already) {
           await ctx.db.insert('planExercises', {
             num: await nextNum(ctx), dayNum: d.num, position, name: m.name, aliases: [], sets: m.sets, repMin: m.repMin, repMax: m.repMax, step: m.step,
-            laterSlot: m.laterSlot, perHand: false, perSide: m.perSide, bodyweight: false, note: m.note, active: true, restSeconds: m.restSeconds, goals: [],
+            laterSlot: m.laterSlot, perHand: false, perSide: m.perSide, bodyweight: false, note: m.note, active: true, restSeconds: m.restSeconds, goals: goalsOf(m),
           });
         }
       }

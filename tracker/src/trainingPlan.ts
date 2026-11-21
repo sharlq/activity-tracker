@@ -3,7 +3,7 @@
 // from the journal (or the gym app's own data) and hands plain data to progression.ts, which decides everything.
 import type { PlanDay, PlanExercise, TrainingSet, TrainingSource } from './trainingTypes.ts';
 import type { BodyFlag, Checkpoint, ExerciseRule, Flag, GoalProgress, Session, Suggestion, Verdict } from './progression.ts';
-import { bodyFlags, copiedRuns, estimated1RM, expectedOn, ffmi, flags, goalProgress, median, medianChange, quantile, rollingAverage, shiftDay, suggest, verdict, weightAsOf, weightLabel } from './progression.ts';
+import { bodyFlags, skipsSet, copiedRuns, estimated1RM, expectedOn, ffmi, flags, goalProgress, median, medianChange, quantile, rollingAverage, shiftDay, suggest, verdict, weightAsOf, weightLabel } from './progression.ts';
 
 export interface PlanSession extends Session {
   workoutId: number;
@@ -44,7 +44,7 @@ export function sessionsOf(exercise: PlanExercise, sets: readonly TrainingSet[])
   const rule = ruleOf(exercise);
   const byWorkout = new Map<number, TrainingSet[]>();
   for (const s of sets) {
-    if (!names.has(s.exercise.toLowerCase()) || s.flag === 'outlier' || s.reps === null) continue;
+    if (!names.has(s.exercise.toLowerCase()) || skipsSet(s.flag) || s.reps === null) continue;
     const weight = s.weight ?? (exercise.bodyweight ? 0 : null);
     if (weight === null) continue;
     const list = byWorkout.get(s.workoutId) ?? [];

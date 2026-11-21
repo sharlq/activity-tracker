@@ -3,6 +3,12 @@
 // no database or clock, so the window, the command line, and later a coach can all ask
 // it the same questions and get the same answers.
 
+/**
+ * Sets the engine leaves out: 'outlier' (a likely typo, until checked) and 'form' (lifted with
+ * form that moved the load off the target muscle: kept in the history, not counted).
+ */
+export const skipsSet = (flag: string | null | undefined): boolean => flag === 'outlier' || flag === 'form';
+
 /** What the engine needs to know about an exercise in the plan. */
 export interface ExerciseRule {
   sets: number;
