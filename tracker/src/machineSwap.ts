@@ -85,10 +85,13 @@ export function historyFor(name: string): { name: string; flag: string | null; w
   return null;
 }
 
+/** Every name in a plan the machine takes the place of: the lifts it replaces and its stand-ins. */
+export const swappedNames = (s: MachineSwap): string[] => [...s.replaces, ...(s.standIns ?? []).map((x) => x.name)];
+
 /** The new exercise an old lift's name turns into (for imports that still use the old names). */
 export function machineFor(name: string): MachineExercise | null {
   const n = name.trim().toLowerCase();
-  return MACHINE_SWAPS.find((s) => s.replaces.some((r) => r.toLowerCase() === n))?.exercise ?? null;
+  return MACHINE_SWAPS.find((s) => swappedNames(s).some((r) => r.toLowerCase() === n))?.exercise ?? null;
 }
 
 const q = (v: string) => `'${v.replace(/'/g, "''")}'`;
